@@ -5,6 +5,7 @@ import axios from 'axios';
 import { startServer } from './proxyServer';
 import { installCert, checkCertInstalled } from './cert';
 import { downloadFile } from './utils';
+import { parsePlatformVideo } from './platformParsers';
 
 let win;
 
@@ -59,6 +60,15 @@ export default function initIPC() {
         return e.response.request.res.responseUrl;
       }
       return url;
+    }
+  });
+
+  ipcMain.handle('invoke_解析平台视频', async (event, inputUrl) => {
+    try {
+      return await parsePlatformVideo(inputUrl);
+    } catch (err) {
+      log.error('parse platform video error:', err);
+      throw new Error(err?.message || '视频解析失败，请确认链接是否有效');
     }
   });
 

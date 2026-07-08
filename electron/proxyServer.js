@@ -232,7 +232,6 @@ const WVDS_INJECT_SCRIPT = `
 
 export async function startServer({ win, setProxyErrorCallback = f => f }) {
   const port = await getPort();
-  const capturedMedia = {};
 
   return new Promise(async (resolve, reject) => {
     const proxy = hoxy
@@ -284,80 +283,6 @@ export async function startServer({ win, setProxyErrorCallback = f => f }) {
       }
       return html + scriptTag;
     }
-
-    function getPlatformFromUrl(hostname) {
-      var hn = (hostname || '').toLowerCase();
-      if (hn.indexOf('douyin') !== -1 || hn.indexOf('iesdouyin') !== -1 || hn.indexOf('bytecdn') !== -1 || hn.indexOf('douyinvod') !== -1 || hn.indexOf('byteimg') !== -1) return '抖音';
-      if (hn.indexOf('kuaishou') !== -1 || hn.indexOf('ksapisrv') !== -1 || hn.indexOf('gifshow') !== -1 || hn.indexOf('ksurl') !== -1 || hn.indexOf('ksyungslb') !== -1) return '快手';
-      if (hn.indexOf('xiaohongshu') !== -1 || hn.indexOf('xhscdn') !== -1 || hn.indexOf('xhsslink') !== -1) return '小红书';
-      if (hn.indexOf('bilibili') !== -1 || hn.indexOf('bilivideo') !== -1 || hn.indexOf('hdslb') !== -1) return 'B站';
-      if (hn.indexOf('weixin') !== -1 || hn.indexOf('qq.com') !== -1 || hn.indexOf('qpic.cn') !== -1) return '微信视频号';
-      if (hn.indexOf('miaopai') !== -1 || hn.indexOf('weibo') !== -1 || hn.indexOf('sinaimg') !== -1) return '微博';
-      if (hn.indexOf('youku') !== -1 || hn.indexOf('tudou') !== -1 || hn.indexOf('cibntv') !== -1) return '优酷';
-      return '';
-    }
-
-    function isVideoRequest(url, contentType) {
-      var ct = (contentType || '').toLowerCase();
-      var u = (url || '').split('?')[0].toLowerCase();
-      if (ct.indexOf('video/') !== -1) return true;
-      if (ct.indexOf('octet-stream') !== -1 && /\.(mp4|webm|mov|m4v|flv|mkv)(\?|$)/.test(u)) return true;
-      if (/\.(mp4|webm|mov|m4v|flv|mkv)(\?|$)/.test(u)) return true;
-      return false;
-    }
-
-    var reqReferers = {};
-    proxy.intercept(
-      { phase: 'request' },
-      (req) => {
-        var fullUrl = req.fullUrl || req.url;
-        var ref = req.headers['referer'] || req.headers['origin'] || '';
-        if (ref) {
-          reqReferers[fullUrl] = ref;
-        }
-      }
-    );
-
-    proxy.intercept(
-      { phase: 'response' },
-      (req, res) => {
-        var fullUrl = req.fullUrl || req.url;
-        var contentType = res.headers['content-type'] || '';
-        var contentLength = res.headers['content-length'];
-        var hostname = (req.hostname || '').toLowerCase();
-
-        if (hostname.indexOf('weixin') !== -1 || hostname.indexOf('qq.com') !== -1 || hostname.indexOf('qpic.cn') !== -1) return;
-        if (!isVideoRequest(fullUrl, contentType)) return;
-
-        var mediaKey = fullUrl.split('?')[0];
-        if (capturedMedia[mediaKey]) return;
-
-        var fileSize = contentLength ? parseInt(contentLength) : 0;
-        if (fileSize > 0 && fileSize < 100000) return;
-
-        capturedMedia[mediaKey] = true;
-        var platform = getPlatformFromUrl(hostname);
-        var referer = reqReferers[fullUrl] || req.headers['referer'] || req.headers['origin'] || '';
-        var desc = platform ? (platform + '视频') : '网络视频';
-        if (!platform && hostname) {
-          var parts = hostname.split('.');
-          if (parts.length >= 2) desc = parts[parts.length - 2] + '视频';
-        }
-
-        console.log('capture media:', fullUrl.substring(0, 100), contentType, fileSize);
-        sendCapture({
-          url: fullUrl,
-          size: fileSize,
-          description: desc,
-          decode_key: '',
-          hd_url: null,
-          uploader: '',
-          platform: platform,
-          referer: referer,
-          noDecrypt: true,
-        });
-      },
-    );
 
     proxy.intercept(
       {

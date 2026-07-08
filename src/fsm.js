@@ -163,7 +163,7 @@ export default createMachine(
           .invoke('invoke_启动服务')
           .then(() => {
             ipcRenderer.on('VIDEO_CAPTURE', fnDealVideoCapture);
-            message.success('视频捕获服务已启动，支持微信视频号/抖音/快手/小红书/B站');
+            message.success('微信视频号捕获服务已启动');
           })
           .catch(() => {
             send('e_开启服务失败');

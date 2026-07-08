@@ -236,6 +236,22 @@ body {
       }
     }
 
+    &-parse-btn {
+      flex-shrink: 0;
+      border-radius: @radius-sm;
+      font-weight: 500;
+      height: 36px;
+      padding: 0 16px;
+      color: @primary-color;
+      border-color: rgba(79, 70, 229, 0.24);
+      background: @card-bg;
+      &:hover, &:focus {
+        color: @primary-light !important;
+        border-color: @primary-light !important;
+        background: @primary-bg !important;
+      }
+    }
+
     &-content {
       flex: 1;
       display: flex;

@@ -39,6 +39,7 @@ function App() {
   const [addressBarUrl, setAddressBarUrl] = useState('https://channels.weixin.qq.com/');
   const [isLoading, setIsLoading] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
+  const [isParsing, setIsParsing] = useState(false);
   const webviewRef = useRef(null);
 
   const loadUrl = useCallback((rawUrl) => {
@@ -68,6 +69,34 @@ function App() {
     }
     loadUrl(inputUrl.trim());
   }, [inputUrl, loadUrl]);
+
+  const handleParseVideo = useCallback(() => {
+    const url = (inputUrl || addressBarUrl || '').trim();
+    if (!url) {
+      message.warning('请输入小红书、抖音或快手视频链接');
+      return;
+    }
+    setIsParsing(true);
+    ipcRenderer.invoke('invoke_解析平台视频', url).then((data) => {
+      send({
+        type: 'e_视频捕获',
+        url: data.url,
+        size: data.size,
+        description: data.description,
+        decodeKey: data.decode_key,
+        hdUrl: data.hd_url,
+        uploader: data.uploader,
+        platform: data.platform,
+        referer: data.referer,
+        noDecrypt: data.noDecrypt,
+      });
+      message.success(`${data.platform}视频解析成功，已加入下载列表`);
+    }).catch((err) => {
+      message.error(err?.message || '视频解析失败，请换一个链接重试');
+    }).finally(() => {
+      setIsParsing(false);
+    });
+  }, [addressBarUrl, inputUrl, send]);
 
   const handleKeyPress = useCallback((e) => {
     if (e.key === 'Enter') {
@@ -171,7 +200,7 @@ function App() {
               </div>
               <div className="App-inited-tips">
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  💡 在微信/浏览器/客户端中播放视频即可自动捕获
+                  💡 视频号在微信中播放自动捕获；小红书/抖音/快手请粘贴链接后点解析下载
                 </Text>
               </div>
             </div>
@@ -188,7 +217,7 @@ function App() {
 
               <div className="App-inited-addressbar">
                 <Input
-                  placeholder="粘贴视频链接（视频号/抖音/快手/小红书/B站等），或在客户端中播放自动捕获"
+                  placeholder="粘贴小红书/抖音/快手分享链接后点解析下载，或打开视频号页面辅助浏览"
                   prefix={isResolving ? <LoadingOutlined /> : <LinkOutlined style={{ color: '#94a3b8' }} />}
                   value={addressBarUrl}
                   onChange={e => { setAddressBarUrl(e.target.value); setInputUrl(e.target.value); }}
@@ -206,6 +235,13 @@ function App() {
                 className="App-inited-go-btn"
               >
                 前往
+              </Button>
+              <Button
+                onClick={handleParseVideo}
+                loading={isParsing}
+                className="App-inited-parse-btn"
+              >
+                解析下载
               </Button>
             </div>
           </div>
@@ -253,8 +289,8 @@ function App() {
                 {captureList.length === 0 ? (
                   <div className="App-inited-empty">
                     <VideoCameraOutlined className="App-inited-empty-icon" />
-                    <div className="App-inited-empty-text">播放视频即可自动捕获</div>
-                    <div className="App-inited-empty-hint">支持微信视频号、抖音、快手、小红书、B站</div>
+                    <div className="App-inited-empty-text">微信视频号播放后自动捕获</div>
+                    <div className="App-inited-empty-hint">小红书、抖音、快手请粘贴分享链接并点击解析下载</div>
                   </div>
                 ) : (
                   <Table
@@ -379,7 +415,7 @@ function App() {
               <VideoCameraOutlined className="App-uninit-icon" />
             </div>
             <Title level={3} style={{ textAlign: 'center', margin: '16px 0 8px', fontWeight: 600 }}>视频下载器</Title>
-            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 20, fontSize: 14 }}>微信视频号 / 抖音 / 快手 / 小红书 / B站</Text>
+            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 20, fontSize: 14 }}>微信视频号捕获 / 抖音、快手、小红书链接解析</Text>
             <Alert
               message="首次使用需要初始化证书"
               description="本工具通过本地代理方式捕获网络中的视频流，需要安装根证书以支持 HTTPS 解析。证书仅存储在本地，不会上传任何数据。"
