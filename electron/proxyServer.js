@@ -32,10 +32,30 @@ const WVDS_INJECT_SCRIPT = `
     console.log.apply(console, ['[WVDS]'].concat(Array.prototype.slice.call(arguments)));
   }
 
+  function normalizeVideoUrl(url, token) {
+    if (!url || typeof url !== 'string') return '';
+    if (url.indexOf('//') === 0) url = location.protocol + url;
+    if (token && url.indexOf(token) === -1) return url + token;
+    return url;
+  }
+
+  function isLikelyVideoUrl(url) {
+    return typeof url === 'string' &&
+      (url.indexOf('http') === 0 || url.indexOf('//') === 0) &&
+      (/\\.mp4(\\?|$)/i.test(url) || url.indexOf('finder.video.qq.com') !== -1 || url.indexOf('video.qq.com') !== -1 || url.indexOf('qpic.cn') !== -1);
+  }
+
+  function guessDescription(obj) {
+    return (obj && (obj.description || obj.desc || obj.title || obj.nickname)) || document.title || '微信视频号视频';
+  }
+
   function sendVideoData(data) {
     if (!data || !data.url) return;
     var desc = (data.description || '未命名视频').trim();
-    var keyBase = desc + '|' + (data.size || 0);
+    data.platform = data.platform || '微信视频号';
+    data.referer = data.referer || location.href;
+    data.noDecrypt = !!data.noDecrypt;
+    var keyBase = (data.decode_key || '') + '|' + (data.url || '').split('?')[0] + '|' + desc + '|' + (data.size || 0);
     if (capturedSet[keyBase]) {
       if (data.hd_url && !capturedSet[keyBase + '|hd']) {
         capturedSet[keyBase + '|hd'] = true;
@@ -60,10 +80,24 @@ const WVDS_INJECT_SCRIPT = `
   }
 
   function extractVideoFromObject(obj, depth) {
-    if (!obj || depth > 8) return;
+    if (!obj || depth > 12) return;
     if (typeof obj !== 'object') return;
 
     try {
+      var directUrl = obj.videoUrl || obj.video_url || obj.h264Url || obj.h264_url || obj.url;
+      var h265Url = obj.h265Url || obj.h265_url;
+      if (isLikelyVideoUrl(directUrl) || isLikelyVideoUrl(h265Url)) {
+        sendVideoData({
+          decode_key: obj.decodeKey || obj.decode_key || '',
+          url: normalizeVideoUrl(directUrl || h265Url, obj.urlToken || obj.url_token),
+          hd_url: isLikelyVideoUrl(h265Url) ? normalizeVideoUrl(h265Url, obj.hdUrlToken || obj.hd_url_token) : null,
+          size: obj.fileSize || obj.file_size || obj.size || obj.contentLength || 0,
+          description: guessDescription(obj),
+          uploader: obj.nickname || obj.userName || obj.username || '',
+          noDecrypt: !(obj.decodeKey || obj.decode_key),
+        });
+      }
+
       if (obj.object && obj.object.object_desc && obj.object.object_desc.media) {
         var media = obj.object.object_desc.media[0];
         if (media && media.url) {
@@ -76,6 +110,7 @@ const WVDS_INJECT_SCRIPT = `
             size: media.file_size || media.fileSize || 0,
             description: desc.trim ? desc.trim() : desc,
             uploader: nickname,
+            platform: '微信视频号',
           });
         }
         return;
@@ -93,6 +128,7 @@ const WVDS_INJECT_SCRIPT = `
             size: media2.fileSize || media2.file_size || 0,
             description: desc2.trim ? desc2.trim() : desc2,
             uploader: nickname2,
+            platform: '微信视频号',
           });
         }
         return;
@@ -209,6 +245,27 @@ const WVDS_INJECT_SCRIPT = `
     hookFetch();
     hookXHR();
     hookWeixinJSBridge();
+    scanVideoElements();
+  }
+
+  function scanVideoElements() {
+    try {
+      var videos = document.querySelectorAll('video');
+      for (var i = 0; i < videos.length; i++) {
+        var video = videos[i];
+        var src = video.currentSrc || video.src || '';
+        if (!isLikelyVideoUrl(src)) continue;
+        sendVideoData({
+          url: src,
+          size: 0,
+          description: document.title || '微信视频号视频',
+          uploader: '',
+          noDecrypt: true,
+          platform: '微信视频号',
+          referer: location.href,
+        });
+      }
+    } catch(e) {}
   }
 
   tryInitHooks();
@@ -220,6 +277,9 @@ const WVDS_INJECT_SCRIPT = `
   }, 1000);
 
   setTimeout(function() { clearInterval(bridgeInterval); }, 30000);
+
+  var videoScanInterval = setInterval(scanVideoElements, 1000);
+  setTimeout(function() { clearInterval(videoScanInterval); }, 60000);
 
   if (document.addEventListener) {
     document.addEventListener('WeixinJSBridgeReady', function() {
@@ -273,11 +333,20 @@ export async function startServer({ win, setProxyErrorCallback = (f) => f }) {
       {
         phase: "request",
         hostname: "aaaa.com",
-        as: "json",
+        as: "string",
       },
       (req, res) => {
-        if (req.json) {
-          sendCapture(req.json);
+        let data = null;
+        if (req.string) {
+          try {
+            data = JSON.parse(req.string);
+          } catch (e) {}
+        }
+        if (!data && req.json) {
+          data = req.json;
+        }
+        if (data) {
+          sendCapture(data);
         }
         res.string = "ok";
         res.statusCode = 200;
@@ -311,6 +380,13 @@ export async function startServer({ win, setProxyErrorCallback = (f) => f }) {
     var reqReferers = {};
     proxy.intercept({ phase: "request" }, (req) => {
       var fullUrl = req.fullUrl || req.url;
+      var hostname = (req.hostname || "").toLowerCase();
+      if (
+        hostname.indexOf("channels.weixin.qq.com") !== -1 ||
+        hostname.indexOf("res.wx.qq.com") !== -1
+      ) {
+        req.headers["accept-encoding"] = "gzip, deflate";
+      }
       var ref = req.headers["referer"] || req.headers["origin"] || "";
       if (ref) {
         reqReferers[fullUrl] = ref;
