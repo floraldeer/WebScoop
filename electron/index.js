@@ -55,7 +55,9 @@ app.whenReady().then(() => {
 });
 
 app.on('web-contents-created', (event, contents) => {
-  contents.session.setProxy({ proxyRules: 'direct://' });
+  if (contents.getType?.() !== 'webview') {
+    contents.session.setProxy({ proxyRules: 'direct://' });
+  }
   contents.on('certificate-error', (event, url, error, certificate, callback) => {
     event.preventDefault();
     callback(true);

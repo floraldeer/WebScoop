@@ -2,7 +2,7 @@ import fs from "fs";
 import hoxy from "hoxy";
 import getPort from "get-port";
 import log from "electron-log";
-import { app } from "electron";
+import { app, session } from "electron";
 import CONFIG from "./const";
 import { setProxy, closeProxy } from "./setProxy";
 import { getPlatformFromHostname } from "./platformParsers";
@@ -244,6 +244,11 @@ export async function startServer({ win, setProxyErrorCallback = (f) => f }) {
         },
       })
       .listen(port, () => {
+        const webviewProxyRules = `http=127.0.0.1:${port};https=127.0.0.1:${port}`;
+        session
+          .fromPartition("persist:wvds")
+          .setProxy({ proxyRules: webviewProxyRules })
+          .catch((err) => log.log("set webview proxy err", err));
         setProxy("127.0.0.1", port)
           .then(() => resolve())
           .catch((err) => {
@@ -319,6 +324,12 @@ export async function startServer({ win, setProxyErrorCallback = (f) => f }) {
       var hostname = (req.hostname || "").toLowerCase();
 
       if (hostname.indexOf("aaaa.com") !== -1) return;
+      if (
+        hostname.indexOf("weixin") !== -1 ||
+        hostname.indexOf("qq.com") !== -1 ||
+        hostname.indexOf("qpic.cn") !== -1
+      )
+        return;
       if (!isVideoRequest(fullUrl, contentType)) return;
 
       var mediaKey = fullUrl.split("?")[0];
@@ -417,7 +428,10 @@ export async function startServer({ win, setProxyErrorCallback = (f) => f }) {
             req.url.indexOf("runtime") !== -1 ||
             req.url.indexOf("vendor") !== -1 ||
             req.url.indexOf("bundle") !== -1 ||
-            req.url.indexOf("app") !== -1
+            req.url.indexOf("app") !== -1 ||
+            req.url.indexOf("feed.") !== -1 ||
+            req.url.indexOf("finder") !== -1 ||
+            req.url.indexOf("merlin") !== -1
           ) {
             res.string = res.string + "\n;" + WVDS_INJECT_SCRIPT;
             console.log("inject js:", req.url);
