@@ -1,12 +1,13 @@
-import fs from 'fs';
-import hoxy from 'hoxy';
-import getPort from 'get-port';
-import log from 'electron-log';
-import { app } from 'electron';
-import CONFIG from './const';
-import { setProxy, closeProxy } from './setProxy';
+import fs from "fs";
+import hoxy from "hoxy";
+import getPort from "get-port";
+import log from "electron-log";
+import { app } from "electron";
+import CONFIG from "./const";
+import { setProxy, closeProxy } from "./setProxy";
+import { getPlatformFromHostname } from "./platformParsers";
 
-if (process.platform === 'win32') {
+if (process.platform === "win32") {
   process.env.OPENSSL_BIN = CONFIG.OPEN_SSL_BIN_PATH;
   process.env.OPENSSL_CONF = CONFIG.OPEN_SSL_CNF_PATH;
 }
@@ -230,8 +231,9 @@ const WVDS_INJECT_SCRIPT = `
 })();
 `;
 
-export async function startServer({ win, setProxyErrorCallback = f => f }) {
+export async function startServer({ win, setProxyErrorCallback = (f) => f }) {
   const port = await getPort();
+  const capturedMedia = {};
 
   return new Promise(async (resolve, reject) => {
     const proxy = hoxy
@@ -242,105 +244,195 @@ export async function startServer({ win, setProxyErrorCallback = f => f }) {
         },
       })
       .listen(port, () => {
-        setProxy('127.0.0.1', port)
+        setProxy("127.0.0.1", port)
           .then(() => resolve())
           .catch((err) => {
             setProxyErrorCallback(err);
-            reject('设置代理失败');
+            reject("设置代理失败");
           });
       })
-      .on('error', err => {
-        log.log('proxy err', err);
+      .on("error", (err) => {
+        log.log("proxy err", err);
       });
 
     function sendCapture(data) {
-      console.log('video captured:', data.description, data.platform || 'wechat');
-      win?.webContents?.send?.('VIDEO_CAPTURE', data);
+      console.log(
+        "video captured:",
+        data.description,
+        data.platform || "wechat"
+      );
+      win?.webContents?.send?.("VIDEO_CAPTURE", data);
     }
 
     proxy.intercept(
       {
-        phase: 'request',
-        hostname: 'aaaa.com',
-        as: 'json',
+        phase: "request",
+        hostname: "aaaa.com",
+        as: "json",
       },
       (req, res) => {
         if (req.json) {
           sendCapture(req.json);
         }
-        res.string = 'ok';
+        res.string = "ok";
         res.statusCode = 200;
-      },
+      }
     );
 
     function injectScriptToHtml(html) {
-      var scriptTag = '<script>' + WVDS_INJECT_SCRIPT + '</script>';
-      if (html.indexOf('</body>') !== -1) {
-        return html.replace('</body>', scriptTag + '</body>');
+      var scriptTag = "<script>" + WVDS_INJECT_SCRIPT + "</script>";
+      if (html.indexOf("</body>") !== -1) {
+        return html.replace("</body>", scriptTag + "</body>");
       }
-      if (html.indexOf('</html>') !== -1) {
-        return html.replace('</html>', scriptTag + '</html>');
+      if (html.indexOf("</html>") !== -1) {
+        return html.replace("</html>", scriptTag + "</html>");
       }
       return html + scriptTag;
     }
 
+    function isVideoRequest(url, contentType) {
+      var ct = (contentType || "").toLowerCase();
+      var u = (url || "").split("?")[0].toLowerCase();
+      if (ct.indexOf("video/") !== -1) return true;
+      if (
+        ct.indexOf("octet-stream") !== -1 &&
+        /\.(mp4|webm|mov|m4v|flv|mkv)(\?|$)/.test(u)
+      )
+        return true;
+      if (/\.(mp4|webm|mov|m4v|flv|mkv)(\?|$)/.test(u)) return true;
+      return false;
+    }
+
+    var reqReferers = {};
+    proxy.intercept({ phase: "request" }, (req) => {
+      var fullUrl = req.fullUrl || req.url;
+      var ref = req.headers["referer"] || req.headers["origin"] || "";
+      if (ref) {
+        reqReferers[fullUrl] = ref;
+      }
+    });
+
+    proxy.intercept({ phase: "response" }, (req, res) => {
+      var fullUrl = req.fullUrl || req.url;
+      var contentType = res.headers["content-type"] || "";
+      var contentLength = res.headers["content-length"];
+      var hostname = (req.hostname || "").toLowerCase();
+
+      if (hostname.indexOf("aaaa.com") !== -1) return;
+      if (!isVideoRequest(fullUrl, contentType)) return;
+
+      var mediaKey = fullUrl.split("?")[0];
+      if (capturedMedia[mediaKey]) return;
+
+      var fileSize = contentLength ? parseInt(contentLength) : 0;
+      if (fileSize > 0 && fileSize < 100000) return;
+
+      capturedMedia[mediaKey] = true;
+      var platform = getPlatformFromHostname(hostname);
+      var referer =
+        reqReferers[fullUrl] ||
+        req.headers["referer"] ||
+        req.headers["origin"] ||
+        "";
+      var desc = platform ? platform + "视频" : "网络视频";
+      if (!platform && hostname) {
+        var parts = hostname.split(".");
+        if (parts.length >= 2) desc = parts[parts.length - 2] + "视频";
+      }
+
+      console.log(
+        "capture media:",
+        fullUrl.substring(0, 100),
+        contentType,
+        fileSize
+      );
+      sendCapture({
+        url: fullUrl,
+        size: fileSize,
+        description: desc,
+        decode_key: "",
+        hd_url: null,
+        uploader: "",
+        platform: platform,
+        referer: referer,
+        noDecrypt: true,
+      });
+    });
+
     proxy.intercept(
       {
-        phase: 'response',
-        hostname: 'channels.weixin.qq.com',
-        as: 'string',
+        phase: "response",
+        hostname: "channels.weixin.qq.com",
+        as: "string",
       },
       (req, res) => {
-        var contentType = res.headers['content-type'] || '';
-        var body = res.string || '';
-        if (req.url.includes('/web/pages/feed')) {
-          res.string = body.includes('</body>')
-            ? body.replace('</body>', injection_html + '\n</body>')
+        var contentType = res.headers["content-type"] || "";
+        var body = res.string || "";
+        if (req.url.includes("/web/pages/feed")) {
+          res.string = body.includes("</body>")
+            ? body.replace("</body>", injection_html + "\n</body>")
             : body + injection_html;
           res.statusCode = 200;
-          console.log('inject feed:', req.url, res.string.length);
+          console.log("inject feed:", req.url, res.string.length);
           return;
         }
-        if (contentType.indexOf('text/html') === -1 && contentType.indexOf('application/xhtml') === -1) return;
-        var isHtml = body.trim().indexOf('<') === 0 &&
-                   (body.indexOf('<html') !== -1 || body.indexOf('<!DOCTYPE') !== -1 || body.indexOf('<body') !== -1);
+        if (
+          contentType.indexOf("text/html") === -1 &&
+          contentType.indexOf("application/xhtml") === -1
+        )
+          return;
+        var isHtml =
+          body.trim().indexOf("<") === 0 &&
+          (body.indexOf("<html") !== -1 ||
+            body.indexOf("<!DOCTYPE") !== -1 ||
+            body.indexOf("<body") !== -1);
         if (isHtml) {
           res.string = injectScriptToHtml(body);
-          console.log('inject html:', req.url);
+          console.log("inject html:", req.url);
         }
-      },
+      }
     );
 
     proxy.intercept(
       {
-        phase: 'response',
-        hostname: 'res.wx.qq.com',
-        as: 'string',
+        phase: "response",
+        hostname: "res.wx.qq.com",
+        as: "string",
       },
       (req, res) => {
-        var contentType = res.headers['content-type'] || '';
-        if (req.url.includes('wvds.inject.js')) {
+        var contentType = res.headers["content-type"] || "";
+        if (req.url.includes("wvds.inject.js")) {
           res.string = WVDS_INJECT_SCRIPT;
           res.statusCode = 200;
-          console.log('serve wvds.inject.js:', req.url);
+          console.log("serve wvds.inject.js:", req.url);
           return;
         }
-        if (contentType.indexOf('javascript') !== -1 || req.url.indexOf('.js') !== -1) {
-          if (req.url.indexOf('polyfills') !== -1 || req.url.indexOf('main.') !== -1 || req.url.indexOf('runtime') !== -1 || req.url.indexOf('vendor') !== -1 || req.url.indexOf('bundle') !== -1 || req.url.indexOf('app') !== -1) {
-            res.string = res.string + '\n;' + WVDS_INJECT_SCRIPT;
-            console.log('inject js:', req.url);
+        if (
+          contentType.indexOf("javascript") !== -1 ||
+          req.url.indexOf(".js") !== -1
+        ) {
+          if (
+            req.url.indexOf("polyfills") !== -1 ||
+            req.url.indexOf("main.") !== -1 ||
+            req.url.indexOf("runtime") !== -1 ||
+            req.url.indexOf("vendor") !== -1 ||
+            req.url.indexOf("bundle") !== -1 ||
+            req.url.indexOf("app") !== -1
+          ) {
+            res.string = res.string + "\n;" + WVDS_INJECT_SCRIPT;
+            console.log("inject js:", req.url);
           }
         }
-      },
+      }
     );
   });
 }
 
-app.on('before-quit', async e => {
+app.on("before-quit", async (e) => {
   e.preventDefault();
   try {
     await closeProxy();
-    console.log('close proxy success');
+    console.log("close proxy success");
   } catch (error) {}
 
   app.exit();

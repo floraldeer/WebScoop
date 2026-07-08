@@ -1,5 +1,5 @@
 {
-  "name": "wechat-video-downloader",
+  "name": "multi-platform-video-downloader",
   "version": "2.0.2",
   "description": "",
   "main": "./build-electron/index.js",
@@ -19,7 +19,7 @@
     "pack:mac": "npm run build-all && electron-builder --mac",
     "pack:all": "npm run build-all && electron-builder --win --mac",
     "gen-icon": "electron-icon-builder --input=./public/icon/icon.png --output=./public/icon",
-    "pretty": "prettier -c --write \"(src/**/*|electron/**/*)\""
+    "pretty": "prettier --write \"src/**/*.{js,jsx,less}\" \"electron/**/*.js\""
   },
   "targets": {
     "electron": {
@@ -46,6 +46,7 @@
     "prettier": "^2.6.2",
     "react-app-rewired": "^2.2.1",
     "react-scripts": "5.0.1",
+    "sharp": "^0.35.3",
     "wait-on": "^6.0.1",
     "webpack": "^5.72.1",
     "webpack-cli": "^4.9.2"
@@ -67,7 +68,8 @@
     "react-dom": "^18.1.0",
     "regedit": "5.0.0",
     "semver": "^7.3.7",
-    "xstate": "^4.32.1"
+    "xstate": "^4.32.1",
+    "youtube-dl-exec": "^3.1.9"
   },
   "author": "lurich",
   "license": "ISC",
@@ -77,8 +79,8 @@
   },
   "build": {
     "extends": null,
-    "productName": "WeChatVideoDownloader",
-    "appId": "com.lurich.WeChatVideoDownloader",
+    "productName": "MultiPlatformVideoDownloader",
+    "appId": "com.lurich.MultiPlatformVideoDownloader",
     "directories": {
       "output": "packs"
     },
@@ -108,8 +110,8 @@
         {
           "target": "nsis",
           "arch": [
-              "x64",
-              "ia32"
+            "x64",
+            "ia32"
           ]
         }
       ],
