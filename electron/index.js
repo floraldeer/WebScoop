@@ -3,9 +3,13 @@ import CONFIG from './const';
 import { checkUpdate } from './utils';
 import initIPC, { setWin } from './ipc';
 
-app.commandLine.appendSwitch('--no-proxy-server');
 process.on('uncaughtException', () => {});
 process.on('unhandledRejection', () => {});
+
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+  event.preventDefault();
+  callback(true);
+});
 
 function createWindow() {
   Menu.setApplicationMenu(null);
@@ -15,15 +19,23 @@ function createWindow() {
   );
 
   const mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
-    // resizable: false,
-    // maximizable: false,
+    width: 1100,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
     webPreferences: {
       webSecurity: false,
       nodeIntegration: true,
       contextIsolation: false,
+      webviewTag: true,
     },
+  });
+
+  mainWindow.webContents.session.setProxy({ proxyRules: 'direct://' });
+
+  mainWindow.webContents.on('certificate-error', (event, url, error, certificate, callback) => {
+    event.preventDefault();
+    callback(true);
   });
 
   setWin(mainWindow);
@@ -39,6 +51,17 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
+  });
+});
+
+app.on('web-contents-created', (event, contents) => {
+  contents.session.setProxy({ proxyRules: 'direct://' });
+  contents.on('certificate-error', (event, url, error, certificate, callback) => {
+    event.preventDefault();
+    callback(true);
+  });
+  contents.session.setCertificateVerifyProc((request, callback) => {
+    callback(0);
   });
 });
 

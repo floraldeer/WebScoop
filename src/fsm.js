@@ -1,17 +1,20 @@
 import { createMachine, actions } from 'xstate';
 import { ipcRenderer } from 'electron';
 import prettyBytes from 'pretty-bytes';
-import { uniqBy } from 'lodash';
 import { message } from 'antd';
 
 export default createMachine(
   {
-    id: '微信视频号下载工具',
+    id: '视频下载工具',
     context: {
       captureList: [],
       currentUrl: '',
       savePath: '',
       downloadProgress: 0,
+      decodeKey: '',
+      description: '',
+      noDecrypt: false,
+      referer: '',
     },
     initial: '检测初始化',
     states: {
@@ -76,13 +79,6 @@ export default createMachine(
                 actions: 'action_设置当前地址',
                 target: '下载',
               },
-              e_预览: {
-                actions: 'action_设置当前地址',
-                target: '预览',
-              },
-              e_改变规则: {
-                actions: 'action_改变规则',
-              },
             },
           },
           下载: {
@@ -115,21 +111,6 @@ export default createMachine(
                   src: 'invoke_下载视频',
                 },
               },
-              下载完成: {
-                on: {
-                  e_取消: { target: '#初始化完成.空闲' },
-                  e_打开文件位置: {
-                    actions: 'action_打开文件位置',
-                  },
-                },
-              },
-            },
-          },
-          预览: {
-            on: {
-              e_关闭: {
-                target: '空闲',
-              },
             },
           },
         },
@@ -154,21 +135,35 @@ export default createMachine(
           }
         });
       },
-      invoke_开始初始化: (context, event) => send => {
+      invoke_开始初始化: () => send => {
         ipcRenderer
           .invoke('invoke_开始初始化')
           .catch(() => {})
           .finally(() => send('e_重新检测'));
       },
-      invoke_启动服务: (context, event) => send => {
-        const fnDealVideoCapture = (eName, { url, size, description, decode_key, ...other }) => {
-          send({ type: 'e_视频捕获', url, size, description, decodeKey: decode_key, ...other });
+      invoke_启动服务: () => send => {
+        const fnDealVideoCapture = (eName, data) => {
+          if (!data) return;
+          const { url, size, description, decode_key, hd_url, uploader, platform, referer, noDecrypt } = data;
+          send({
+            type: 'e_视频捕获',
+            url,
+            size,
+            description,
+            decodeKey: decode_key,
+            hdUrl: hd_url,
+            uploader,
+            platform,
+            referer,
+            noDecrypt,
+          });
         };
 
         ipcRenderer
           .invoke('invoke_启动服务')
           .then(() => {
             ipcRenderer.on('VIDEO_CAPTURE', fnDealVideoCapture);
+            message.success('视频捕获服务已启动，支持微信视频号/抖音/快手/小红书/B站');
           })
           .catch(() => {
             send('e_开启服务失败');
@@ -178,97 +173,134 @@ export default createMachine(
           ipcRenderer.removeListener('VIDEO_CAPTURE', fnDealVideoCapture);
         };
       },
-      invoke_选择下载位置: (context, event) => send => {
+      invoke_选择下载位置: () => send => {
         ipcRenderer
           .invoke('invoke_选择下载位置')
           .then(data => {
-            send({
-              type: 'e_确认位置',
-              data,
-            });
+            send({ type: 'e_确认位置', data });
           })
           .catch(() => send('e_取消'));
       },
       invoke_下载视频:
-        ({ currentUrl, savePath, decodeKey, description }) =>
+        ({ currentUrl, savePath, decodeKey, description, noDecrypt, referer }) =>
         send => {
+          let completed = false;
           ipcRenderer
             .invoke('invoke_下载视频', {
               url: currentUrl,
               decodeKey,
               savePath,
               description,
+              noDecrypt,
+              referer,
             })
-            .then(({ fullFileName }) => {
-              send({ type: 'e_下载完成', fullFileName, currentUrl });
+            .then((result) => {
+              if (completed) return;
+              completed = true;
+              if (result && result.fullFileName) {
+                send({ type: 'e_下载完成', fullFileName: result.fullFileName, currentUrl });
+              } else {
+                send('e_下载失败');
+              }
             })
-            .catch(() => {
+            .catch((e) => {
+              console.error('download error:', e);
+              if (completed) return;
+              completed = true;
               send('e_下载失败');
             });
 
-          ipcRenderer.on('e_进度变化', (event, arg) => {
-            send({
-              type: 'e_进度变化',
-              data: arg,
-            });
-          });
+          const onProgress = (event, arg) => {
+            send({ type: 'e_进度变化', data: arg });
+          };
+          ipcRenderer.on('e_进度变化', onProgress);
 
           return () => {
-            ipcRenderer.removeAllListeners('e_进度变化');
+            ipcRenderer.removeListener('e_进度变化', onProgress);
           };
         },
     },
     actions: {
       action_视频捕获: actions.assign(
-        ({ captureList }, { url, size, description, decodeKey, ...other }) => {
-          captureList.push({
-            size,
+        ({ captureList }, { url, size, description, decodeKey, hdUrl, uploader, platform, referer, noDecrypt }) => {
+          if (!url) return {};
+          const newItem = {
+            size: size || 0,
             url,
-            prettySize: prettyBytes(+size),
-            description,
-            decodeKey,
-            ...other,
+            hdUrl: hdUrl || null,
+            prettySize: size ? prettyBytes(+size) : '未知',
+            description: description || '未命名视频',
+            decodeKey: decodeKey || '',
+            uploader: uploader || '',
+            platform: platform || '',
+            referer: referer || '',
+            noDecrypt: !!noDecrypt,
+          };
+          const dupKey = (newItem.url.split('?')[0] + '|' + newItem.size).trim();
+          const existingIndex = captureList.findIndex(item => {
+            const itemUrl = (item.hdUrl || item.url).split('?')[0];
+            const newUrl = (newItem.hdUrl || newItem.url).split('?')[0];
+            if (itemUrl === newUrl && item.size === newItem.size && item.size > 0) return true;
+            if (item.url.split('?')[0] === newItem.url.split('?')[0] && item.url) return true;
+            if (hdUrl && item.hdUrl && item.hdUrl.split('?')[0] === hdUrl.split('?')[0]) return true;
+            if (decodeKey && item.decodeKey && item.decodeKey === decodeKey && item.description === newItem.description) return true;
+            return false;
           });
-
+          if (existingIndex >= 0) {
+            const existing = captureList[existingIndex];
+            if (hdUrl && !existing.hdUrl) {
+              const updated = [...captureList];
+              updated[existingIndex] = {
+                ...existing,
+                hdUrl: hdUrl,
+                size: size || existing.size,
+                prettySize: size ? prettyBytes(+size) : existing.prettySize,
+                url: url || existing.url,
+              };
+              return { captureList: updated };
+            }
+            return {};
+          }
+          const platformTag = newItem.platform ? `[${newItem.platform}] ` : '';
+          message.success(`捕获到视频: ${platformTag}${newItem.description}`);
           return {
-            captureList: uniqBy(captureList, 'url'),
+            captureList: [newItem, ...captureList],
           };
         },
       ),
       action_清空捕获记录: actions.assign(() => {
-        return {
-          captureList: [],
-        };
+        return { captureList: [] };
       }),
-      action_设置当前地址: actions.assign((_, { url, decodeKey, description }) => {
+      action_设置当前地址: actions.assign((_, { url, decodeKey, description, noDecrypt, referer }) => {
         return {
           currentUrl: url,
-          decodeKey: decodeKey,
-          description: description,
+          decodeKey: decodeKey || '',
+          description: description || '',
+          noDecrypt: !!noDecrypt,
+          referer: referer || '',
         };
       }),
       action_存储下载位置: actions.assign((_, { data }) => {
-        return {
-          savePath: data,
-        };
+        return { savePath: data };
       }),
       action_进度变化: actions.assign((_, { data }) => {
-        return {
-          downloadProgress: ~~(data * 100),
-        };
+        return { downloadProgress: ~~data };
       }),
       action_下载完成: actions.assign(({ captureList }, { fullFileName, currentUrl }) => {
+        message.success('下载完成');
         return {
+          downloadProgress: 0,
           captureList: captureList.map(item => {
             if ((item.hdUrl || item.url) === currentUrl) {
-              item.fullFileName = fullFileName;
+              return { ...item, fullFileName };
             }
             return item;
           }),
         };
       }),
-      action_下载失败: actions.log(() => {
-        message.error('网络错误，请重试');
+      action_下载失败: actions.assign(() => {
+        message.error('下载失败，请重试');
+        return { downloadProgress: 0 };
       }),
     },
   },

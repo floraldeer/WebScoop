@@ -3,11 +3,9 @@ import { app, dialog, shell } from 'electron';
 import semver from 'semver';
 import fs from 'fs';
 import {getDecryptionArray} from './decrypt';
-import {Transform } from 'stream';
+import {Transform, PassThrough } from 'stream';
 
-// packageUrl 需要包含 { "version": "1.0.0" } 结构
 function checkUpdate(
-  // 可以使用加速地址 https://cdn.jsdelivr.net/gh/lecepin/electron-react-tpl/package.json
   packageUrl = 'https://raw.githubusercontent.com/lecepin/electron-react-tpl/master/package.json',
   downloadUrl = 'https://github.com/lecepin/electron-react-tpl/releases',
 ) {
@@ -49,34 +47,47 @@ function xorTransform(decryptionArray) {
   });
 }
 
-function downloadFile(url,decodeKey, fullFileName, progressCallback) {
-  const xorStream = xorTransform(getDecryptionArray(decodeKey));
+function downloadFile(url, decodeKey, fullFileName, progressCallback, options = {}) {
+  const { noDecrypt = false, referer = '' } = options;
+  const headers = {
+    'User-Agent':
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  };
+  if (referer) {
+    headers['Referer'] = referer;
+    headers['Origin'] = referer.split('/').slice(0, 3).join('/');
+  }
+
   return get(url, {
     responseType: 'stream',
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
-    },
-  }).then(({ data, headers }) => {
+    headers,
+  }).then(({ data, headers: respHeaders }) => {
     let currentLen = 0;
-    const totalLen = headers['content-length'];
+    const totalLen = respHeaders['content-length'];
 
     return new Promise((resolve, reject) => {
       data.on('data', ({ length }) => {
         currentLen += length;
-        progressCallback?.(currentLen / totalLen);
+        progressCallback?.(Math.round((currentLen / totalLen) * 100));
       });
 
       data.on('error', err => reject(err));
 
-      data.pipe(xorStream).pipe(
-        fs.createWriteStream(fullFileName).on('finish', () => {
-          resolve({
-            fullFileName,
-            totalLen,
-          });
-        }),
-      );
+      const outputStream = fs.createWriteStream(fullFileName);
+      outputStream.on('finish', () => {
+        resolve({
+          fullFileName,
+          totalLen,
+        });
+      });
+      outputStream.on('error', err => reject(err));
+
+      if (noDecrypt || !decodeKey) {
+        data.pipe(outputStream);
+      } else {
+        const xorStream = xorTransform(getDecryptionArray(decodeKey));
+        data.pipe(xorStream).pipe(outputStream);
+      }
     });
   });
 }

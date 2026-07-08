@@ -1,6 +1,7 @@
 import { ipcMain, dialog } from 'electron';
 import log from 'electron-log';
 import { throttle } from 'lodash';
+import axios from 'axios';
 import { startServer } from './proxyServer';
 import { installCert, checkCertInstalled } from './cert';
 import { downloadFile } from './utils';
@@ -35,21 +36,49 @@ export default function initIPC() {
     return result?.[0];
   });
 
-  ipcMain.handle('invoke_下载视频', async (event, { url, decodeKey, savePath, description }) => {
+  ipcMain.handle('invoke_解析链接', async (event, inputUrl) => {
+    let url = inputUrl.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+    try {
+      const resp = await axios.get(url, {
+        maxRedirects: 10,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MicroMessenger/3.8.7.0',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+      if (resp.request && resp.request.res && resp.request.res.responseUrl) {
+        return resp.request.res.responseUrl;
+      }
+      return url;
+    } catch (e) {
+      if (e.response && e.response.request && e.response.request.res && e.response.request.res.responseUrl) {
+        return e.response.request.res.responseUrl;
+      }
+      return url;
+    }
+  });
+
+  ipcMain.handle('invoke_下载视频', async (event, { url, decodeKey, savePath, description, noDecrypt, referer }) => {
     let fileName = description?.replaceAll?.(/\\|\/|:|\*|\?|"|<|>|\|/g, '') || Date.now();
 
     console.log('description:', description);
     console.log('fileName:', fileName);
     console.log('url:', url);
-    console.log('decodeKey:', decodeKey);
+    console.log('noDecrypt:', noDecrypt);
 
     return downloadFile(
       url,
       decodeKey,
       `${savePath}/${fileName}.mp4`,
-      throttle(value => win?.webContents?.send?.('e_进度变化', value), 1000),
+      throttle(value => win?.webContents?.send?.('e_进度变化', value), 200),
+      { noDecrypt, referer },
     ).catch(err => {
-      console;
+      console.error('download error:', err);
+      throw err;
     });
   });
 }
