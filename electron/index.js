@@ -10,8 +10,8 @@ process.on('unhandledRejection', () => {});
 function createWindow() {
   Menu.setApplicationMenu(null);
   checkUpdate(
-    'https://cdn.jsdelivr.net/gh/lecepin/WeChatVideoDownloader/package.json',
-    'https://github.com/lecepin/WeChatVideoDownloader/releases',
+    'https://cdn.jsdelivr.net/gh/xiaofu666/WebScoop/package.json',
+    'https://github.com/xiaofu666/WebScoop/releases',
   );
 
   const mainWindow = new BrowserWindow({

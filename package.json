@@ -1,5 +1,5 @@
 {
-  "name": "vidgrab",
+  "name": "webscoop",
   "version": "2.0.2",
   "description": "",
   "main": "./build-electron/index.js",
@@ -75,12 +75,12 @@
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xiaofu666/WeChatVideoDownloader.git"
+    "url": "git+https://github.com/xiaofu666/WebScoop.git"
   },
   "build": {
     "extends": null,
-    "productName": "VidGrab",
-    "appId": "com.lurich.VidGrab",
+    "productName": "WebScoop",
+    "appId": "com.lurich.WebScoop",
     "directories": {
       "output": "packs"
     },

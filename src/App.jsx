@@ -100,8 +100,11 @@ function App() {
           <div className="App-inited-header">
             <div className="App-inited-header-top">
               <div className="App-inited-brand">
-                <VideoCameraOutlined className="App-inited-brand-icon" />
-                <span className="App-inited-brand-title">VidGrab</span>
+                <LinkOutlined className="App-inited-brand-icon" />
+                <div className="App-inited-brand-copy">
+                  <span className="App-inited-brand-title">WebScoop · 拾海</span>
+                  <Text type="secondary" className="App-inited-brand-slogan">弱水三千，掬海一寸，收纳万千。</Text>
+                </div>
                 <Tag color="purple" className="brand-tag">多平台</Tag>
               </div>
               <div className="App-inited-tips">
@@ -313,8 +316,9 @@ function App() {
             <div className="App-uninit-icon-wrap">
               <VideoCameraOutlined className="App-uninit-icon" />
             </div>
-            <Title level={3} style={{ textAlign: 'center', margin: '16px 0 8px', fontWeight: 600 }}>VidGrab</Title>
-            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 20, fontSize: 14 }}>多平台链接解析 / 播放自动捕获 / 无水印优先下载</Text>
+            <Title level={3} style={{ textAlign: 'center', margin: '16px 0 8px', fontWeight: 600 }}>WebScoop · 拾海</Title>
+            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 8, fontSize: 14 }}>弱水三千，掬海一寸，收纳万千。</Text>
+            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 20, fontSize: 13 }}>多平台链接解析 / 播放自动捕获 / 无水印优先下载</Text>
             <Alert
               message="首次使用需要初始化证书"
               description="本工具通过本地代理方式捕获网络中的视频流，需要安装根证书以支持 HTTPS 解析。证书仅存储在本地，不会上传任何数据。"

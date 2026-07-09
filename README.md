@@ -1,9 +1,10 @@
-# 微信视频号下载器
+# WebScoop · 拾海
 
-> 🔥🔥🔥 V2.x版本支持加密视频的下载，可到 Release 中下载更新。
+> 弱水三千，掬海一寸，收纳万千。
 
 <img src="https://user-images.githubusercontent.com/11046969/169296046-513b5e3a-a688-4342-9759-eb131ef7e42f.png" width="100" />
 
+- 支持多平台链接解析与媒体捕获
 - 支持实时捕获视频号的视频地址
 - 捕获后，可进行预览和下载
 - 支持 Win/Mac
@@ -16,7 +17,7 @@
 
 ### 下载
 
-请到 Release 中进行下载：https://github.com/xiaofu666/WeChatVideoDownloader/releases
+请到 Release 中进行下载：https://github.com/xiaofu666/WebScoop/releases
 
 ---
 
@@ -94,4 +95,3 @@ npm run pack
 * windows下清除 C:\Users\<user>\AppData\Roaming\Tencent\WeChat\radium\web\profiles\*
 * macOS 下清除 ~/Library/Containers/com.tencent.xinWeChat/Data/.wxapplet/web/profiles/multitab*
 然后重启软件，点击视频号链接，就会捕捉到了
-
