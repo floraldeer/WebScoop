@@ -1,5 +1,5 @@
 {
-  "name": "multi-platform-video-downloader",
+  "name": "vidgrab",
   "version": "2.0.2",
   "description": "",
   "main": "./build-electron/index.js",
@@ -79,8 +79,8 @@
   },
   "build": {
     "extends": null,
-    "productName": "MultiPlatformVideoDownloader",
-    "appId": "com.lurich.MultiPlatformVideoDownloader",
+    "productName": "VidGrab",
+    "appId": "com.lurich.VidGrab",
     "directories": {
       "output": "packs"
     },

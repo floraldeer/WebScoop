@@ -51,7 +51,7 @@ export const PLATFORM_CONFIGS = [
   {
     platform: "B站",
     hosts: ["bilibili.com", "b23.tv", "bilivideo.com", "hdslb.com"],
-    parser: "ytdlp",
+    parser: "bili",
   },
   {
     platform: "YouTube",
@@ -397,6 +397,104 @@ async function getCookieHeader(url) {
   }
 }
 
+// B站解析：走官方 API
+// 1) 从 URL 提取 bvid（BVxxxx）或 aid（av123）
+// 2) 调 api.bilibili.com/x/web-interface/view?bvid=xxx 拿 cid 和 title
+// 3) 调 api.bilibili.com/x/player/playurl?bvid=xxx&cid=xxx&fnval=1（durl 直链）
+//    或 fnval=16（DASH，需 SESSDATA 才有 1080p+）
+// Referer 必须是 https://www.bilibili.com/，Cookie 用浏览器 session 的
+async function parseBilibili(inputUrl) {
+  const url = ensureHttpUrl(inputUrl);
+  // b23.tv 短链先跟随重定向
+  let pageUrl = url;
+  if (/b23\.tv/i.test(pageUrl)) {
+    try {
+      const resp = await axios.get(pageUrl, {
+        maxRedirects: 10,
+        validateStatus: (s) => s >= 200 && s < 400,
+        headers: DEFAULT_HEADERS,
+      });
+      pageUrl = resp.request?.res?.responseUrl || pageUrl;
+    } catch (e) {}
+  }
+
+  const bvidMatch = pageUrl.match(/\/(BV[0-9A-Za-z]+)/);
+  const aidMatch = pageUrl.match(/\/av(\d+)/i);
+  if (!bvidMatch && !aidMatch) {
+    throw new Error("未识别到 B站 BV/AV 号，请确认链接");
+  }
+
+  const cookie = await getCookieHeader("https://www.bilibili.com/");
+  const apiHeaders = {
+    ...DEFAULT_HEADERS,
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    Referer: "https://www.bilibili.com/",
+    Origin: "https://www.bilibili.com",
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+
+  const viewParams = bvidMatch ? `bvid=${bvidMatch[1]}` : `aid=${aidMatch[1]}`;
+  const viewResp = await axios.get(
+    `https://api.bilibili.com/x/web-interface/view?${viewParams}`,
+    { headers: apiHeaders, timeout: 15000, validateStatus: () => true }
+  );
+  if (viewResp.data?.code !== 0) {
+    throw new Error(
+      `B站视频信息获取失败：${viewResp.data?.message || "接口返回异常"}。可能需要登录，请点击【浏览器打开】在系统浏览器里登录 bilibili.com 后重试。`
+    );
+  }
+  const info = viewResp.data.data;
+  const bvid = info.bvid;
+  const cid = info.cid;
+  const title = (info.title || "B站视频").slice(0, 80);
+  const uploader = info.owner?.name || "";
+
+  // 先尝试 fnval=1（durl，返回直接可播的 flv/mp4 分段）
+  const playParams = `bvid=${bvid}&cid=${cid}&qn=80&fnval=1&fnver=0&fourk=1`;
+  const playResp = await axios.get(
+    `https://api.bilibili.com/x/player/playurl?${playParams}`,
+    { headers: apiHeaders, timeout: 15000, validateStatus: () => true }
+  );
+  if (playResp.data?.code !== 0) {
+    throw new Error(
+      `B站视频地址获取失败：${playResp.data?.message || "playurl 返回异常"}。请点击【浏览器打开】在系统浏览器里登录 bilibili.com（Chrome/Safari）后重试。`
+    );
+  }
+  const playData = playResp.data.data;
+  let videoUrl = "";
+  let filesize = 0;
+  if (Array.isArray(playData.durl) && playData.durl.length) {
+    videoUrl = playData.durl[0].url || playData.durl[0].backup_url?.[0] || "";
+    filesize = playData.durl[0].size || 0;
+  } else if (playData.dash?.video?.length) {
+    // dash 是分离的 video+audio；只拿视频轨会没声音；用 durl 更靠谱
+    // 兜底：挑最高清晰度的 video baseUrl
+    const bestVideo = playData.dash.video.sort(
+      (a, b) => (b.bandwidth || 0) - (a.bandwidth || 0)
+    )[0];
+    videoUrl = bestVideo.baseUrl || bestVideo.base_url || "";
+  }
+  if (!videoUrl) {
+    throw new Error(
+      "B站视频未返回可下载地址，可能是充电专享/大会员视频。请点击【浏览器打开】用系统浏览器登录后重试。"
+    );
+  }
+
+  return {
+    url: videoUrl,
+    size: filesize,
+    description: title,
+    decode_key: "",
+    hd_url: null,
+    uploader,
+    platform: "B站",
+    referer: "https://www.bilibili.com/",
+    noDecrypt: true,
+    sourceUrl: pageUrl,
+  };
+}
+
 async function fetchResolvedPage(inputUrl) {
   const url = ensureHttpUrl(inputUrl);
   const cookie = await getCookieHeader(url);
@@ -579,6 +677,22 @@ export async function parsePlatformVideo(inputUrl) {
     );
   }
 
+  if (initialConfig?.parser === "bili") {
+    try {
+      return await parseBilibili(initialUrl);
+    } catch (err) {
+      try {
+        return await parseWithYtDlp(
+          initialUrl,
+          initialConfig.platform,
+          await getCookieHeader(initialUrl)
+        );
+      } catch (fallbackErr) {
+        throw new Error(err?.message || fallbackErr?.message || "B站解析失败");
+      }
+    }
+  }
+
   const page = await fetchResolvedPage(inputUrl);
   const config = detectPlatform(page.resolvedUrl);
   const platform = config.platform;
@@ -591,6 +705,18 @@ export async function parsePlatformVideo(inputUrl) {
 
   if (config.parser === "ytdlp") {
     return parseWithYtDlp(page.resolvedUrl, platform, page.cookie);
+  }
+
+  if (config.parser === "bili") {
+    try {
+      return await parseBilibili(page.resolvedUrl);
+    } catch (err) {
+      try {
+        return await parseWithYtDlp(page.resolvedUrl, platform, page.cookie);
+      } catch (fallbackErr) {
+        throw new Error(err?.message || fallbackErr?.message || "B站解析失败");
+      }
+    }
   }
 
   // 小红书/快手：专用解析，去水印 + 精确标题

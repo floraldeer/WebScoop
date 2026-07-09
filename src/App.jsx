@@ -49,6 +49,12 @@ function App() {
       message.warning(`请输入 ${supportedPlatformText} 视频链接`);
       return;
     }
+    // 视频号需要页面运行拿加密流，直接调浏览器播放触发本地代理捕获
+    if (/channels\.weixin\.qq\.com|finder\.video\.qq\.com/i.test(url)) {
+      shell.openExternal(url);
+      message.info('已用系统浏览器打开视频号页面，播放视频后会自动捕获到下方列表');
+      return;
+    }
     setIsParsing(true);
     ipcRenderer.invoke('invoke_解析平台视频', url).then((data) => {
       send({
@@ -95,7 +101,7 @@ function App() {
             <div className="App-inited-header-top">
               <div className="App-inited-brand">
                 <VideoCameraOutlined className="App-inited-brand-icon" />
-                <span className="App-inited-brand-title">全平台视频下载器</span>
+                <span className="App-inited-brand-title">VidGrab</span>
                 <Tag color="purple" className="brand-tag">多平台</Tag>
               </div>
               <div className="App-inited-tips">
@@ -307,7 +313,7 @@ function App() {
             <div className="App-uninit-icon-wrap">
               <VideoCameraOutlined className="App-uninit-icon" />
             </div>
-            <Title level={3} style={{ textAlign: 'center', margin: '16px 0 8px', fontWeight: 600 }}>全平台视频下载器</Title>
+            <Title level={3} style={{ textAlign: 'center', margin: '16px 0 8px', fontWeight: 600 }}>VidGrab</Title>
             <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 20, fontSize: 14 }}>多平台链接解析 / 播放自动捕获 / 无水印优先下载</Text>
             <Alert
               message="首次使用需要初始化证书"

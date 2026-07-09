@@ -18,11 +18,12 @@ const injection_html = `
 <script type="text/javascript" src="//res.wx.qq.com/t/wx_fed/finder/web/web-finder/res/js/wvds.inject.js"></script>
 `;
 
-// 视频号注入：三重捕获
+// 视频号注入：多重捕获
 // 1. hook WeixinJSBridge.invoke（老 SPA 路径）
-// 2. hook window.fetch（新 SPA 走 fetch 拿 feed 数据）
+// 2. hook window.fetch + Response.prototype.json（新 SPA 走 fetch 拿 feed 数据）
 // 3. hook XMLHttpRequest（部分接口走 XHR）
-// 三条链路共用同一个 extractMedia 函数，从 object_desc.media 中拿 decode_key + url_token
+// 4. hook history.pushState/replaceState（SPA 路由切换时重扫 window 上的状态）
+// 所有链路共用 scan_json 递归器，从 object_desc.media 中拿 decode_key + url_token
 const injection_script = `
 (function() {
   if (window.wvds !== undefined) return;
@@ -48,7 +49,12 @@ const injection_script = `
       if (!desc) return;
       var media_list = desc.media || desc.mediaList || [];
       if (!media_list || !media_list.length) return;
+      // 找有 decode_key 的 media（视频号加密流）；如果没有 decode_key 也上报
       var media = media_list[0];
+      for (var i = 0; i < media_list.length; i++) {
+        var m = media_list[i];
+        if ((m.decode_key || m.decodeKey) && (m.url || m.videoUrl)) { media = m; break; }
+      }
       var url = media.url || media.videoUrl || media.h264Url || media.h265Url;
       if (!url) return;
       var url_token = media.url_token || media.urlToken || "";
@@ -65,28 +71,38 @@ const injection_script = `
       debug_wvds("extract err: " + e.message);
     }
   }
-  function scan_json(data) {
-    if (!data) return;
+  function scan_json(data, depth) {
+    if (!data || depth > 10) return;
+    depth = depth || 0;
     try {
-      // 递归找带 object_desc.media 的节点
-      if (typeof data === "object") {
-        if (data.object && data.object.object_desc) extract_media_from_object(data);
-        if (data.object_desc) extract_media_from_object({ object: data });
-        // finder feed 接口通常在 data.feed.object 或 data.list[i].object
-        if (data.feed) scan_json(data.feed);
-        if (Array.isArray(data.list)) data.list.forEach(scan_json);
-        if (Array.isArray(data.objectList)) data.objectList.forEach(scan_json);
-        if (data.data) scan_json(data.data);
-        if (data.object) extract_media_from_object(data);
+      if (typeof data !== "object") return;
+      if (data.object && (data.object.object_desc || data.object.objectDesc)) extract_media_from_object(data);
+      if (data.object_desc || data.objectDesc) extract_media_from_object({ object: data });
+      if (data.feed) scan_json(data.feed, depth + 1);
+      if (Array.isArray(data.list)) data.list.forEach(function(x){ scan_json(x, depth + 1); });
+      if (Array.isArray(data.objectList)) data.objectList.forEach(function(x){ scan_json(x, depth + 1); });
+      if (Array.isArray(data.feedList)) data.feedList.forEach(function(x){ scan_json(x, depth + 1); });
+      if (Array.isArray(data.contList)) data.contList.forEach(function(x){ scan_json(x, depth + 1); });
+      if (data.data) scan_json(data.data, depth + 1);
+      if (data.resp) scan_json(data.resp, depth + 1);
+      if (data.jsapi_resp) {
+        try {
+          var respJson = data.jsapi_resp.resp_json ? JSON.parse(data.jsapi_resp.resp_json) : data.jsapi_resp;
+          scan_json(respJson, depth + 1);
+        } catch (e) {}
       }
     } catch (e) {}
   }
+  var CGI_PATTERN = /finder|channels\\.weixin\\.qq\\.com|feed|merlin|mmfinderassistant|object|cgi-bin/i;
   // 1) WeixinJSBridge.invoke hook
   function bridge_response(response) {
-    if (!response || !response["err_msg"] || !response["err_msg"].includes("H5ExtTransfer:ok")) return;
+    if (!response) return;
     try {
-      var value = JSON.parse(response["jsapi_resp"]["resp_json"]);
-      scan_json(value);
+      if (response["jsapi_resp"] && response["jsapi_resp"]["resp_json"]) {
+        scan_json(JSON.parse(response["jsapi_resp"]["resp_json"]));
+      } else {
+        scan_json(response);
+      }
     } catch (e) {}
   }
   function wrap_bridge(origin) {
@@ -111,19 +127,22 @@ const injection_script = `
   try_hook_bridge();
   document.addEventListener("WeixinJSBridgeReady", try_hook_bridge, false);
   setInterval(try_hook_bridge, 2000);
-  // 2) fetch hook
+  // 2) fetch hook + Response.prototype.json 兜底
   if (window.fetch && !window.fetch.__wvds) {
     var original_fetch = window.fetch;
     window.fetch = function(input, init) {
       var url_str = typeof input === "string" ? input : (input && input.url) || "";
       var p = original_fetch.apply(this, arguments);
-      if (/finder|channels\\.weixin\\.qq\\.com\\/cgi-bin|feed|merlin/i.test(url_str)) {
-        p.then(function(resp) {
-          try {
-            resp.clone().json().then(scan_json, function(){});
-          } catch (e) {}
-        }, function(){});
-      }
+      // 所有 fetch 响应都尝试扫，命中 CGI 关键词的优先扫，其他响应也扫但不重复
+      p.then(function(resp) {
+        try {
+          if (!resp || typeof resp.clone !== "function") return;
+          var ct = (resp.headers && resp.headers.get && resp.headers.get("content-type")) || "";
+          if (ct.indexOf("json") !== -1 || CGI_PATTERN.test(url_str)) {
+            resp.clone().json().then(function(d){ scan_json(d); }, function(){});
+          }
+        } catch (e) {}
+      }, function(){});
       return p;
     };
     window.fetch.__wvds = true;
@@ -139,29 +158,53 @@ const injection_script = `
     var original_send = window.XMLHttpRequest.prototype.send;
     window.XMLHttpRequest.prototype.send = function() {
       var xhr = this;
-      var url = xhr.__wvds_url || "";
-      if (/finder|channels\\.weixin\\.qq\\.com\\/cgi-bin|feed|merlin/i.test(url)) {
-        xhr.addEventListener("load", function() {
-          try {
-            var text = xhr.responseText;
-            if (text && text.length && text.charAt(0) === "{") scan_json(JSON.parse(text));
-          } catch (e) {}
-        });
-      }
+      xhr.addEventListener("load", function() {
+        try {
+          var ct = xhr.getResponseHeader && xhr.getResponseHeader("content-type") || "";
+          var text = xhr.responseText;
+          if (!text || !text.length) return;
+          if (ct.indexOf("json") !== -1 || text.charAt(0) === "{" || text.charAt(0) === "[") {
+            scan_json(JSON.parse(text));
+          }
+        } catch (e) {}
+      });
       return original_send.apply(this, arguments);
     };
     window.XMLHttpRequest.prototype.__wvds = true;
     debug_wvds("xhr hooked");
   }
-  // 4) 兜底：扫描页面上出现过的 <video src>
-  setInterval(function() {
-    document.querySelectorAll("video[src]").forEach(function(v) {
-      var src = v.src || "";
-      if (/^https?:/.test(src) && sent_keys[src.split("?")[0]] === undefined) {
-        // 视频号自己的 <video> 是 blob:；只有非 blob 时才可能是外链，正常不触发
-      }
-    });
-  }, 3000);
+  // 4) SPA 路由切换钩子：video 号点下一个视频时，路由 push 但页面不刷新；
+  //    此时应对 window.__preload_data / __INITIAL_STATE__ / preload 缓存重扫一次，
+  //    另外强制重新装 bridge hook（新页面可能重建 WeixinJSBridge）
+  function rescan_page_state() {
+    try {
+      ["__INITIAL_STATE__", "__preload_data__", "__PRELOAD_STATE__", "__NUXT__"].forEach(function(k){
+        if (window[k]) scan_json(window[k]);
+      });
+    } catch (e) {}
+    try_hook_bridge();
+  }
+  if (window.history && !window.history.__wvds) {
+    var origPush = window.history.pushState;
+    var origReplace = window.history.replaceState;
+    window.history.pushState = function() {
+      var r = origPush.apply(this, arguments);
+      setTimeout(rescan_page_state, 500);
+      setTimeout(rescan_page_state, 1500);
+      return r;
+    };
+    window.history.replaceState = function() {
+      var r = origReplace.apply(this, arguments);
+      setTimeout(rescan_page_state, 500);
+      return r;
+    };
+    window.addEventListener("popstate", function(){ setTimeout(rescan_page_state, 500); });
+    window.addEventListener("hashchange", function(){ setTimeout(rescan_page_state, 500); });
+    window.history.__wvds = true;
+    debug_wvds("history hooked");
+  }
+  // 5) 定期兜底扫描：一些 SPA 会把 feed 数据直接挂到 window 上
+  setInterval(rescan_page_state, 5000);
   debug_wvds("WVDS inited");
 })();
 `;
@@ -294,6 +337,59 @@ export async function startServer({ win, setProxyErrorCallback = f => f }) {
         if (ae.indexOf('br') !== -1) {
           req.headers['accept-encoding'] = ae.replace(/br,?\s*/gi, '').trim() || 'gzip, deflate';
         }
+      },
+    );
+
+    // 视频号 CGI 响应服务端兜底扫描：万一注入脚本因为 CSP 或加载时序失效，
+    // 从代理层直接解析 finder cgi-bin/mmfinderassistant 的 JSON 响应挖 object_desc.media
+    function scanServerJson(json) {
+      if (!json || typeof json !== 'object') return;
+      const stack = [json];
+      const seen = new WeakSet();
+      while (stack.length) {
+        const cur = stack.pop();
+        if (!cur || typeof cur !== 'object' || seen.has(cur)) continue;
+        seen.add(cur);
+        const container = cur.object || cur;
+        const desc = container?.object_desc || container?.objectDesc;
+        const mediaList = desc?.media || desc?.mediaList;
+        if (Array.isArray(mediaList) && mediaList.length) {
+          const media =
+            mediaList.find((m) => (m.decode_key || m.decodeKey) && (m.url || m.videoUrl)) || mediaList[0];
+          const url = media.url || media.videoUrl || media.h264Url || media.h265Url;
+          if (url) {
+            const urlToken = media.url_token || media.urlToken || '';
+            sendCapture({
+              url: url + urlToken,
+              size: media.file_size || media.fileSize || 0,
+              description: (desc.description || '').trim() || '微信视频号视频',
+              decode_key: media.decode_key || media.decodeKey || '',
+              hd_url: null,
+              uploader: container.nickname || container.username || '',
+              platform: '微信视频号',
+              referer: 'https://channels.weixin.qq.com/',
+            });
+          }
+        }
+        Object.values(cur).forEach((v) => {
+          if (v && typeof v === 'object') stack.push(v);
+        });
+      }
+    }
+
+    proxy.intercept(
+      {
+        phase: 'response',
+        hostname: 'channels.weixin.qq.com',
+        as: 'string',
+      },
+      (req, res) => {
+        if (!req.url || req.url.indexOf('/cgi-bin/') === -1) return;
+        const ct = (res.headers['content-type'] || '').toLowerCase();
+        if (ct.indexOf('json') === -1) return;
+        try {
+          scanServerJson(JSON.parse(res.string || '{}'));
+        } catch (e) {}
       },
     );
 
