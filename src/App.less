@@ -259,6 +259,16 @@ body {
       overflow: hidden;
     }
 
+    &-content-full {
+      padding: 16px;
+      gap: 16px;
+    }
+
+    &-guide {
+      flex-shrink: 0;
+      border-radius: @radius-md;
+    }
+
     &-browser {
       flex: 1;
       min-height: 0;
@@ -296,11 +306,14 @@ body {
     }
 
     &-list {
-      height: 260px;
-      flex-shrink: 0;
+      flex: 1;
+      min-height: 0;
       background: @card-bg;
       display: flex;
       flex-direction: column;
+      border: 1px solid @border-color;
+      border-radius: @radius-md;
+      overflow: hidden;
 
       &-header {
         padding: 10px 20px;

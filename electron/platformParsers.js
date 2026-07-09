@@ -51,7 +51,7 @@ export const PLATFORM_CONFIGS = [
   {
     platform: "B站",
     hosts: ["bilibili.com", "b23.tv", "bilivideo.com", "hdslb.com"],
-    parser: "page",
+    parser: "ytdlp",
   },
   {
     platform: "YouTube",
@@ -253,7 +253,19 @@ function extractTitle(html, platform) {
   const ogTitleMatch = decoded.match(
     /property=["']og:title["'][^>]+content=["']([^"']+)["']/i
   );
-  const rawTitle = ogTitleMatch?.[1] || titleMatch?.[1] || `${platform}视频`;
+  const descMatch = decoded.match(
+    /property=["']og:description["'][^>]+content=["']([^"']+)["']/i
+  );
+  const jsonTitle =
+    decoded.match(/"title"\s*:\s*"([^"\\]{2,120})"/i)?.[1] ||
+    decoded.match(/"desc"\s*:\s*"([^"\\]{2,120})"/i)?.[1] ||
+    decoded.match(/"caption"\s*:\s*"([^"\\]{2,120})"/i)?.[1];
+  const rawTitle =
+    ogTitleMatch?.[1] ||
+    jsonTitle ||
+    descMatch?.[1] ||
+    titleMatch?.[1] ||
+    `${platform}视频`;
   return (
     rawTitle
       .replace(/ - 小红书$/, "")
@@ -275,11 +287,110 @@ function extractAuthor(html) {
   return authorMatch?.[1] || "";
 }
 
+// 小红书专用：从 __INITIAL_STATE__/__INITIAL_SSR_STATE__ 中优先挖 h264[].masterUrl（无水印）；
+// 若失败退到 stream.h264/backupUrl；再退回带 sns-video 的原始 mp4。
+// 顺便把作者名字从描述里剥掉（用户要求）。
+function parseXiaohongshu(html, resolvedUrl) {
+  const decoded = decodeHtmlText(html);
+  const state =
+    decoded.match(/window\.__INITIAL_SSR_STATE__\s*=\s*({[\s\S]+?});?\s*<\/script>/)?.[1] ||
+    decoded.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]+?});?\s*<\/script>/)?.[1];
+
+  const videoUrls = [];
+  const collectVideoUrl = (u) => {
+    if (!u) return;
+    const url = normalizeUrl(String(u), resolvedUrl);
+    if (!/^https?:/.test(url)) return;
+    // 去掉带水印路径
+    if (/watermark|playwm|logo|wm_/i.test(url)) return;
+    videoUrls.push(url);
+  };
+
+  if (state) {
+    // masterUrl 优先，其次 backupUrls，最后 originVideoKey 拼接
+    const masterUrls = state.match(/"masterUrl"\s*:\s*"([^"]+)"/g) || [];
+    masterUrls.forEach((m) => {
+      const url = m.match(/"masterUrl"\s*:\s*"([^"]+)"/)?.[1];
+      collectVideoUrl(url);
+    });
+    const backupUrls = state.match(/"backupUrls"\s*:\s*\[([^\]]+)\]/g) || [];
+    backupUrls.forEach((m) => {
+      (m.match(/"([^"]+)"/g) || []).forEach((u) => collectVideoUrl(u.replace(/"/g, "")));
+    });
+  }
+
+  // 兜底：从整个 HTML 里找 sns-video/xhscdn 的 mp4
+  const snsPattern = /https?:\/\/[^"'\s]+?(?:sns-video[^"'\s]*|xhscdn[^"'\s]*)\.mp4[^"'\s]*/gi;
+  let m;
+  while ((m = snsPattern.exec(decoded))) {
+    collectVideoUrl(m[0]);
+  }
+
+  // 标题：note.title/note.desc（无水印时的原始标题）
+  const rawTitle =
+    decoded.match(/"title"\s*:\s*"([^"\\]{1,200})"/)?.[1] ||
+    decoded.match(/"desc"\s*:\s*"([^"\\]{1,200})"/)?.[1] ||
+    decoded.match(/property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+    decoded.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ||
+    "小红书视频";
+
+  // 清洗：去 @作者、# 号标签保留，去多余空白，去尾部 "- 小红书"
+  const title = rawTitle
+    .replace(/@[\S]+?\s?/g, "")
+    .replace(/[\s\u00A0]+/g, " ")
+    .replace(/[-—]\s?小红书$/i, "")
+    .trim()
+    .slice(0, 80) || "小红书视频";
+
+  return {
+    videoUrl: [...new Set(videoUrls)][0] || "",
+    title,
+  };
+}
+
+// 快手专用：从 __APOLLO_STATE__ / window.__INITIAL_STATE__ 挖 photo.caption + mainMvUrls[0].url
+function parseKuaishou(html, resolvedUrl) {
+  const decoded = decodeHtmlText(html);
+
+  const collectMp4 = () => {
+    const urls = [];
+    const patterns = [
+      /"mainMvUrls"\s*:\s*\[\s*\{\s*"url"\s*:\s*"([^"]+)"/i,
+      /"photoUrl"\s*:\s*"([^"]+)"/i,
+      /"srcNoMark"\s*:\s*"([^"]+)"/i,
+    ];
+    patterns.forEach((p) => {
+      const match = decoded.match(p);
+      if (match?.[1]) urls.push(normalizeUrl(match[1], resolvedUrl));
+    });
+    // 兜底：直接扫 gifshow/chenzhongtech CDN mp4
+    const cdnPattern = /https?:\/\/[^"'\s]+?(?:gifshow|kuaishou|chenzhongtech|ksurl\.cn)[^"'\s]*\.mp4[^"'\s]*/gi;
+    let m;
+    while ((m = cdnPattern.exec(decoded))) urls.push(m[0]);
+    return urls.filter((u) => /^https?:/.test(u));
+  };
+
+  const rawTitle =
+    decoded.match(/"caption"\s*:\s*"([^"\\]{1,200})"/)?.[1] ||
+    decoded.match(/property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+    decoded.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ||
+    "快手视频";
+
+  const title = rawTitle
+    .replace(/[\s\u00A0]+/g, " ")
+    .replace(/[-—]\s?快手$/i, "")
+    .trim()
+    .slice(0, 80) || "快手视频";
+
+  return {
+    videoUrl: [...new Set(collectMp4())][0] || "",
+    title,
+  };
+}
+
 async function getCookieHeader(url) {
   try {
-    const cookies = await session
-      .fromPartition("persist:wvds")
-      .cookies.get({ url });
+    const cookies = await session.defaultSession.cookies.get({ url });
     return cookies.map((item) => `${item.name}=${item.value}`).join("; ");
   } catch (e) {
     return "";
@@ -335,20 +446,20 @@ function selectYtDlpUrl(info) {
 function buildYtDlpError(platform, err) {
   const text = String(err?.stderr || err?.message || err || "");
   if (/unsupported version of Python|Python versions 3\.10/i.test(text)) {
-    return `${platform}解析组件需要 Python 3.10+ 或系统 yt-dlp。请安装/升级 yt-dlp 后重试，或先在内置浏览器中打开并播放视频触发自动捕获。`;
+    return `${platform}解析组件需要 Python 3.10+ 或系统 yt-dlp。请安装/升级 yt-dlp（推荐 brew install yt-dlp）后重试，或点击【浏览器打开】在系统浏览器里播放视频自动捕获。`;
   }
   if (/timed out|timeout|ETIMEDOUT|ChildProcessError/i.test(text)) {
-    return `${platform}解析请求超时。请检查网络是否能访问该平台，或稍后重试；也可以先在内置浏览器中打开并播放视频触发自动捕获。`;
+    return `${platform}解析请求超时。请检查网络是否能访问该平台，或稍后重试；也可以点击【浏览器打开】在系统浏览器里播放视频自动捕获。`;
   }
   if (/cookies|login|sign in|fresh cookies|not logged in/i.test(text)) {
-    return `${platform}解析需要登录态或新鲜 Cookie。请先点击“前往”在内置浏览器中打开该链接并完成登录/播放，再点击“解析下载”。`;
+    return `${platform}解析需要登录态或新鲜 Cookie。请点击【浏览器打开】在系统浏览器（推荐 Chrome/Safari）中登录并播放该视频，再点【解析下载】即可自动读取 Cookie。`;
   }
   if (
     /HTTP Error 412|Precondition Failed|403|429|captcha|verify|risk|风控/i.test(
       text
     )
   ) {
-    return `${platform}解析被平台风控拦截。请先在内置浏览器中打开并播放该视频，或稍后更换网络后重试。`;
+    return `${platform}解析被平台风控拦截（412/403/429）。请点击【浏览器打开】用系统浏览器（推荐 Chrome，且需登录 ${platform}）播放视频后再重试；或稍后更换网络重试。`;
   }
   if (/Unsupported URL/i.test(text)) {
     return `暂不支持该 ${platform} 链接类型，请确认链接为公开视频地址。`;
@@ -394,44 +505,57 @@ function getYtDlpRunner() {
 }
 
 async function parseWithYtDlp(url, platform, cookie) {
-  try {
-    const addHeader = [
-      `user-agent:${DEFAULT_HEADERS["User-Agent"]}`,
-      `referer:${new URL(url).origin}/`,
-    ];
-    if (cookie) addHeader.push(`cookie:${cookie}`);
-    const info = await getYtDlpRunner()(
-      url,
-      {
-        dumpSingleJson: true,
-        noWarnings: true,
-        noCheckCertificates: true,
-        noPlaylist: true,
-        socketTimeout: 20,
-        format: "best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best",
-        addHeader,
-      },
-      { timeout: 60000 }
-    );
-    const videoUrl = selectYtDlpUrl(info);
-    if (!videoUrl) {
-      throw new Error("未获取到可下载的视频地址");
+  const addHeader = [
+    `user-agent:${DEFAULT_HEADERS["User-Agent"]}`,
+    `referer:${new URL(url).origin}/`,
+  ];
+  if (cookie) addHeader.push(`cookie:${cookie}`);
+
+  const baseOptions = {
+    dumpSingleJson: true,
+    noWarnings: true,
+    noCheckCertificates: true,
+    noPlaylist: true,
+    socketTimeout: 20,
+    format: "best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best",
+    addHeader,
+  };
+
+  const cookieBrowsers =
+    process.platform === "darwin"
+      ? ["safari", "chrome", "firefox"]
+      : ["chrome", "firefox", "edge"];
+  const attemptOptions = cookie
+    ? [baseOptions]
+    : cookieBrowsers
+        .map((browser) => ({ ...baseOptions, cookiesFromBrowser: browser }))
+        .concat([baseOptions]);
+
+  let lastErr;
+  for (const options of attemptOptions) {
+    try {
+      const info = await getYtDlpRunner()(url, options, { timeout: 60000 });
+      const videoUrl = selectYtDlpUrl(info);
+      if (!videoUrl) {
+        throw new Error("未获取到可下载的视频地址");
+      }
+      return {
+        url: videoUrl,
+        size: info?.filesize || info?.filesize_approx || 0,
+        description: (info?.title || `${platform}视频`).slice(0, 80),
+        decode_key: "",
+        hd_url: null,
+        uploader: info?.uploader || info?.channel || "",
+        platform,
+        referer: info?.webpage_url || url,
+        noDecrypt: true,
+        sourceUrl: info?.webpage_url || url,
+      };
+    } catch (err) {
+      lastErr = err;
     }
-    return {
-      url: videoUrl,
-      size: info?.filesize || info?.filesize_approx || 0,
-      description: (info?.title || `${platform}视频`).slice(0, 80),
-      decode_key: "",
-      hd_url: null,
-      uploader: info?.uploader || info?.channel || "",
-      platform,
-      referer: info?.webpage_url || url,
-      noDecrypt: true,
-      sourceUrl: info?.webpage_url || url,
-    };
-  } catch (err) {
-    throw new Error(buildYtDlpError(platform, err));
   }
+  throw new Error(buildYtDlpError(platform, lastErr));
 }
 
 export async function parsePlatformVideo(inputUrl) {
@@ -443,7 +567,7 @@ export async function parsePlatformVideo(inputUrl) {
 
   if (initialConfig?.parser === "capture") {
     throw new Error(
-      `${initialConfig.platform}链接已识别。该平台需要页面运行后才能拿到真实媒体地址，请点击“前往”打开链接并播放视频，软件会自动捕获到下载列表。`
+      `${initialConfig.platform}链接需要页面运行后才能拿到真实媒体地址。请点击【浏览器打开】用系统浏览器打开并播放视频，软件会自动捕获到下方列表。`
     );
   }
 
@@ -461,12 +585,48 @@ export async function parsePlatformVideo(inputUrl) {
 
   if (config.parser === "capture") {
     throw new Error(
-      `${platform}链接已识别。该平台需要页面运行后才能拿到真实媒体地址，请点击“前往”打开链接并播放视频，软件会自动捕获到下载列表。`
+      `${platform}链接需要页面运行后才能拿到真实媒体地址。请点击【浏览器打开】用系统浏览器打开并播放视频，软件会自动捕获到下方列表。`
     );
   }
 
   if (config.parser === "ytdlp") {
     return parseWithYtDlp(page.resolvedUrl, platform, page.cookie);
+  }
+
+  // 小红书/快手：专用解析，去水印 + 精确标题
+  if (platform === "小红书") {
+    const { videoUrl, title } = parseXiaohongshu(page.html, page.resolvedUrl);
+    if (videoUrl) {
+      return {
+        url: videoUrl,
+        size: 0,
+        description: title,
+        decode_key: "",
+        hd_url: null,
+        uploader: "",
+        platform,
+        referer: page.resolvedUrl,
+        noDecrypt: true,
+        sourceUrl: page.resolvedUrl,
+      };
+    }
+  }
+  if (platform === "快手") {
+    const { videoUrl, title } = parseKuaishou(page.html, page.resolvedUrl);
+    if (videoUrl) {
+      return {
+        url: videoUrl,
+        size: 0,
+        description: title,
+        decode_key: "",
+        hd_url: null,
+        uploader: extractAuthor(page.html),
+        platform,
+        referer: page.resolvedUrl,
+        noDecrypt: true,
+        sourceUrl: page.resolvedUrl,
+      };
+    }
   }
 
   const candidates = collectVideoCandidates(page.html, page.resolvedUrl);
@@ -478,7 +638,7 @@ export async function parsePlatformVideo(inputUrl) {
     } catch (err) {
       throw new Error(
         `${platform}视频解析失败：页面中未找到可下载的视频地址。${
-          err?.message || "请先在内置浏览器中打开并播放后重试。"
+          err?.message || "请点击【浏览器打开】在系统浏览器里播放视频后自动捕获，或稍后重试。"
         }`
       );
     }

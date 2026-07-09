@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useMachine } from '@xstate/react';
 import { Table, Button, Progress, Alert, Input, Space, Typography, Tag, Tooltip, message } from 'antd';
 import { shell, ipcRenderer } from 'electron';
@@ -10,18 +10,15 @@ import {
   RedoOutlined,
   LinkOutlined,
   StarOutlined,
-  HomeOutlined,
-  ArrowLeftOutlined,
-  ArrowRightOutlined,
-  ReloadOutlined,
   LoadingOutlined,
   VideoCameraOutlined,
   ExclamationCircleOutlined,
+  ExportOutlined,
 } from '@ant-design/icons';
 import fsm from './fsm';
 
 import './App.less';
-const { Text, Title } = Typography;
+const { Text, Title, Paragraph } = Typography;
 
 const platformColors = {
   '微信视频号': '#07c160',
@@ -44,43 +41,10 @@ function App() {
   const [state, send] = useMachine(fsm);
   const { captureList, downloadProgress } = state.context;
   const [inputUrl, setInputUrl] = useState('');
-  const [webviewUrl, setWebviewUrl] = useState('https://channels.weixin.qq.com/');
-  const [addressBarUrl, setAddressBarUrl] = useState('https://channels.weixin.qq.com/');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isResolving, setIsResolving] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
-  const webviewRef = useRef(null);
-
-  const loadUrl = useCallback((rawUrl) => {
-    let url = rawUrl.trim();
-    if (!url) return;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://' + url;
-    }
-    setIsResolving(true);
-    ipcRenderer.invoke('invoke_解析链接', url).then((realUrl) => {
-      setWebviewUrl(realUrl);
-      setAddressBarUrl(realUrl);
-      setIsLoading(true);
-      setIsResolving(false);
-    }).catch(() => {
-      setWebviewUrl(url);
-      setAddressBarUrl(url);
-      setIsLoading(true);
-      setIsResolving(false);
-    });
-  }, []);
-
-  const handleLoadUrl = useCallback(() => {
-    if (!inputUrl.trim()) {
-      message.warning('请输入链接地址');
-      return;
-    }
-    loadUrl(inputUrl.trim());
-  }, [inputUrl, loadUrl]);
 
   const handleParseVideo = useCallback(() => {
-    const url = (inputUrl || addressBarUrl || '').trim();
+    const url = inputUrl.trim();
     if (!url) {
       message.warning(`请输入 ${supportedPlatformText} 视频链接`);
       return;
@@ -105,85 +69,12 @@ function App() {
     }).finally(() => {
       setIsParsing(false);
     });
-  }, [addressBarUrl, inputUrl, send]);
+  }, [inputUrl, send]);
 
-  const handleKeyPress = useCallback((e) => {
-    if (e.key === 'Enter') {
-      handleLoadUrl();
-    }
-  }, [handleLoadUrl]);
-
-  const goHome = useCallback(() => {
-    loadUrl('https://channels.weixin.qq.com/');
-  }, [loadUrl]);
-
-  const goBack = useCallback(() => {
-    if (webviewRef.current?.canGoBack()) {
-      webviewRef.current.goBack();
-    }
-  }, []);
-
-  const goForward = useCallback(() => {
-    if (webviewRef.current?.canGoForward()) {
-      webviewRef.current.goForward();
-    }
-  }, []);
-
-  const reload = useCallback(() => {
-    webviewRef.current?.reload();
-    setIsLoading(true);
-  }, []);
-
-  useEffect(() => {
-    const wv = webviewRef.current;
-    if (!wv) return;
-
-    const handleStartLoad = () => setIsLoading(true);
-    const handleStopLoad = () => {
-      setIsLoading(false);
-      try {
-        const currentUrl = wv.getURL();
-        if (currentUrl && currentUrl !== 'about:blank') {
-          setAddressBarUrl(currentUrl);
-        }
-      } catch (e) {}
-    };
-    const handleDidNavigate = (e) => {
-      if (e.url) {
-        setAddressBarUrl(e.url);
-      }
-    };
-    const handleDidNavigateInPage = (e) => {
-      if (e.isMainFrame && e.url) {
-        setAddressBarUrl(e.url);
-      }
-    };
-    const handleNewWindow = (e) => {
-      e.preventDefault();
-      if (e.url) {
-        loadUrl(e.url);
-      }
-    };
-    const handleDomReady = () => {
-      setIsLoading(false);
-    };
-
-    wv.addEventListener('did-start-loading', handleStartLoad);
-    wv.addEventListener('did-stop-loading', handleStopLoad);
-    wv.addEventListener('did-navigate', handleDidNavigate);
-    wv.addEventListener('did-navigate-in-page', handleDidNavigateInPage);
-    wv.addEventListener('new-window', handleNewWindow);
-    wv.addEventListener('dom-ready', handleDomReady);
-
-    return () => {
-      wv.removeEventListener('did-start-loading', handleStartLoad);
-      wv.removeEventListener('did-stop-loading', handleStopLoad);
-      wv.removeEventListener('did-navigate', handleDidNavigate);
-      wv.removeEventListener('did-navigate-in-page', handleDidNavigateInPage);
-      wv.removeEventListener('new-window', handleNewWindow);
-      wv.removeEventListener('dom-ready', handleDomReady);
-    };
-  }, [loadUrl]);
+  const openInBrowser = useCallback(() => {
+    const url = inputUrl.trim() || 'https://channels.weixin.qq.com/';
+    shell.openExternal(url);
+  }, [inputUrl]);
 
   const isDownloading = state.matches('初始化完成.下载.下载中');
 
@@ -209,43 +100,33 @@ function App() {
               </div>
               <div className="App-inited-tips">
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  支持 {supportedPlatformText}：可粘贴链接解析，也可在内置浏览器播放后自动捕获
+                  支持 {supportedPlatformText}
                 </Text>
               </div>
             </div>
 
             <div className="App-inited-toolbar">
-              <div className="App-inited-nav">
-                <Button.Group>
-                  <Button icon={<ArrowLeftOutlined />} size="middle" onClick={goBack} title="后退" className="nav-btn" />
-                  <Button icon={<ArrowRightOutlined />} size="middle" onClick={goForward} title="前进" className="nav-btn" />
-                  <Button icon={<ReloadOutlined spin={isLoading} />} size="middle" onClick={reload} title="刷新" className="nav-btn" />
-                  <Button icon={<HomeOutlined />} size="middle" onClick={goHome} title="视频号首页" className="nav-btn" />
-                </Button.Group>
-              </div>
-
               <div className="App-inited-addressbar">
                 <Input
-                  placeholder={`粘贴 ${supportedPlatformText} 分享链接后点解析下载，或打开页面播放自动捕获`}
-                  prefix={isResolving ? <LoadingOutlined /> : <LinkOutlined style={{ color: '#94a3b8' }} />}
-                  value={addressBarUrl}
-                  onChange={e => { setAddressBarUrl(e.target.value); setInputUrl(e.target.value); }}
-                  onKeyDown={handleKeyPress}
-                  onPressEnter={handleLoadUrl}
+                  placeholder={`粘贴视频分享链接后点【解析下载】，或点【浏览器打开】播放视频号自动捕获`}
+                  prefix={<LinkOutlined style={{ color: '#94a3b8' }} />}
+                  value={inputUrl}
+                  onChange={e => setInputUrl(e.target.value)}
+                  onPressEnter={handleParseVideo}
                   className="address-input"
                   bordered={false}
                 />
               </div>
 
               <Button
-                type="primary"
-                onClick={handleLoadUrl}
-                loading={isResolving}
+                onClick={openInBrowser}
+                icon={<ExportOutlined />}
                 className="App-inited-go-btn"
               >
-                前往
+                浏览器打开
               </Button>
               <Button
+                type="primary"
                 onClick={handleParseVideo}
                 loading={isParsing}
                 className="App-inited-parse-btn"
@@ -255,23 +136,26 @@ function App() {
             </div>
           </div>
 
-          <div className="App-inited-content">
-            <div className="App-inited-browser">
-              <webview
-                ref={webviewRef}
-                id="wvds-webview"
-                src={webviewUrl}
-                useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                allowpopups
-                plugins
-                partition="persist:wvds"
-              />
-              {isLoading && (
-                <div className="App-inited-browser-loading">
-                  <LoadingOutlined style={{ fontSize: 22, color: '#4f46e5' }} />
+          <div className="App-inited-content App-inited-content-full">
+            <Alert
+              type="info"
+              showIcon
+              className="App-inited-guide"
+              message="使用说明"
+              description={
+                <div>
+                  <Paragraph style={{ margin: 0 }}>
+                    <b>抖音 / 小红书 / 快手 / B站 / YouTube / X / TikTok / Instagram / Facebook / Vimeo / 微博：</b>
+                    直接把视频分享链接粘贴到上方输入框，点【解析下载】即可。
+                  </Paragraph>
+                  <Paragraph style={{ margin: '8px 0 0 0' }}>
+                    <b>微信视频号：</b>
+                    点【浏览器打开】用系统浏览器（推荐 Safari / Chrome）打开视频号页面并播放视频；
+                    因为已经设置了系统代理，播放到的视频会被自动捕获到下方列表。
+                  </Paragraph>
                 </div>
-              )}
-            </div>
+              }
+            />
 
             <div className="App-inited-list">
               <div className="App-inited-list-header">
@@ -298,7 +182,7 @@ function App() {
                 {captureList.length === 0 ? (
                   <div className="App-inited-empty">
                     <VideoCameraOutlined className="App-inited-empty-icon" />
-                    <div className="App-inited-empty-text">粘贴链接解析，或播放视频自动捕获</div>
+                    <div className="App-inited-empty-text">粘贴链接解析，或在浏览器播放视频后自动捕获</div>
                     <div className="App-inited-empty-hint">支持 {supportedPlatformText}</div>
                   </div>
                 ) : (
