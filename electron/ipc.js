@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from 'electron';
+import { ipcMain, dialog, shell, app } from 'electron';
 import log from 'electron-log';
 import { throttle } from 'lodash';
 import axios from 'axios';
@@ -6,12 +6,15 @@ import { startServer } from './proxyServer';
 import { installCert, checkCertInstalled } from './cert';
 import { downloadFile } from './utils';
 import { parsePlatformVideo } from './platformParsers';
+import { openWechatBrowser } from './wechatBrowser';
+import { parseWechatShortLink } from './wechatFinder';
 
 let win;
+let lastDownloadDir = '';
 
 export default function initIPC() {
   ipcMain.handle('invoke_初始化信息', async (event, arg) => {
-    return checkCertInstalled();
+    return await checkCertInstalled();
   });
 
   ipcMain.handle('invoke_开始初始化', (event, arg) => {
@@ -63,6 +66,27 @@ export default function initIPC() {
     }
   });
 
+  ipcMain.handle('invoke_打开视频号浏览器', async (event, url) => {
+    try {
+      await openWechatBrowser(url);
+      return true;
+    } catch (err) {
+      log.error('open wechat browser failed:', err);
+      throw new Error(err?.message || '打开视频号浏览器失败');
+    }
+  });
+
+  // 视频号短链直接调 API 拿元信息（作者/描述/封面+可能的视频 URL），
+  // 拿不到 videoUrl 就返回元信息卡片让用户在 UI 里看到内容而不是白屏。
+  ipcMain.handle('invoke_解析视频号短链', async (event, url) => {
+    try {
+      return await parseWechatShortLink(url);
+    } catch (err) {
+      log.error('parse wechat short link failed:', err);
+      throw new Error(err?.message || '视频号短链解析失败');
+    }
+  });
+
   ipcMain.handle('invoke_解析平台视频', async (event, inputUrl) => {
     try {
       return await parsePlatformVideo(inputUrl);
@@ -80,6 +104,8 @@ export default function initIPC() {
     console.log('url:', url);
     console.log('noDecrypt:', noDecrypt);
 
+    if (savePath) lastDownloadDir = savePath;
+
     return downloadFile(
       url,
       decodeKey,
@@ -90,6 +116,14 @@ export default function initIPC() {
       console.error('download error:', err);
       throw err;
     });
+  });
+
+  // 打开视频存放目录：优先上次下载目录，否则回退系统下载目录
+  ipcMain.handle('invoke_打开视频目录', async () => {
+    const target = lastDownloadDir || app.getPath('downloads');
+    const err = await shell.openPath(target);
+    if (err) throw new Error(err);
+    return target;
   });
 }
 

@@ -1,6 +1,7 @@
 import axios from "axios";
 import { execFileSync } from "child_process";
-import { session } from "electron";
+import path from "path";
+import { app, session } from "electron";
 import youtubedl from "youtube-dl-exec";
 
 const DEFAULT_HEADERS = {
@@ -571,8 +572,16 @@ function getYtDlpRunner() {
   const createRunner = youtubedl.create || youtubedl.youtubeDl?.create;
   if (!createRunner) return youtubedl;
 
+  // 打包后 node_modules 不再进 asar，yt-dlp 走 extraResources 落到 resources/yt-dlp-bin。
+  // 开发态仍回退到 node_modules 内置二进制。
+  const ytDlpFile = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+  const bundledYtDlp = app?.isPackaged
+    ? path.join(process.resourcesPath, "yt-dlp-bin", ytDlpFile)
+    : null;
+
   const candidates = [
     process.env.YT_DLP_PATH,
+    bundledYtDlp,
     "/opt/homebrew/bin/yt-dlp",
     "/usr/local/bin/yt-dlp",
     "/usr/bin/yt-dlp",

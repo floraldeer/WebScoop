@@ -12,17 +12,19 @@ export async function setProxy(host, port) {
       throw 'no network';
     }
 
+    // 视频号视频流走 http://finder.video.qq.com（明文 HTTP），因此必须同时设置
+    // HTTP 代理(-setwebproxy) 和 HTTPS 代理(-setsecurewebproxy)，都指向本地 hoxy 端口，
+    // 否则大量 HTTP 视频请求会绕过代理导致抓不到（"看了很多只抓到少数"的根因）。
+    const run = (cmd) =>
+      new Promise((resolve, reject) => {
+        exec(cmd, (error) => (error ? reject(null) : resolve(true)));
+      });
+
     return Promise.all(
-      networks.map(network => {
-        return new Promise((resolve, reject) => {
-          exec(`networksetup -setsecurewebproxy "${network}" ${host} ${port}`, error => {
-            if (error) {
-              reject(null);
-            } else {
-              resolve(network);
-            }
-          });
-        });
+      networks.map(async (network) => {
+        await run(`networksetup -setwebproxy "${network}" ${host} ${port}`);
+        await run(`networksetup -setsecurewebproxy "${network}" ${host} ${port}`);
+        return network;
       }),
     );
   } else {
@@ -50,17 +52,17 @@ export async function closeProxy() {
       throw 'no network';
     }
 
+    // 关闭时必须同时关掉 HTTP 与 HTTPS 代理，否则退出后用户网络仍被劫持到已失效端口。
+    const run = (cmd) =>
+      new Promise((resolve) => {
+        exec(cmd, () => resolve(true));
+      });
+
     return Promise.all(
-      networks.map(network => {
-        return new Promise((resolve, reject) => {
-          exec(`networksetup -setsecurewebproxystate "${network}" off`, error => {
-            if (error) {
-              reject(null);
-            } else {
-              resolve(network);
-            }
-          });
-        });
+      networks.map(async (network) => {
+        await run(`networksetup -setwebproxystate "${network}" off`);
+        await run(`networksetup -setsecurewebproxystate "${network}" off`);
+        return network;
       }),
     );
   } else {

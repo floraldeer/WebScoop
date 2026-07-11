@@ -1,6 +1,6 @@
 {
   "name": "webscoop",
-  "version": "2.0.2",
+  "version": "2.2.3",
   "description": "",
   "main": "./build-electron/index.js",
   "homepage": "./",
@@ -11,7 +11,7 @@
     "start-web": "react-app-rewired start",
     "start-electron": "webpack --config webpack.electron.js && electron .",
     "debug-electron": "webpack --config webpack.electron.js && electron --inspect --unhandled-rejections=strict --trace-deprecation .",
-    "build-web": "react-app-rewired build",
+    "build-web": "cross-env GENERATE_SOURCEMAP=false react-app-rewired build",
     "build-electron": "webpack --config webpack.electron.js",
     "build-all": "rm -rf ./build && rm -rf ./build-electron && npm run build-electron && npm run build-web",
     "pack": "npm run build-all && electron-builder",
@@ -68,10 +68,11 @@
     "react-dom": "^18.1.0",
     "regedit": "5.0.0",
     "semver": "^7.3.7",
+    "sudo-prompt": "^9.2.1",
     "xstate": "^4.32.1",
     "youtube-dl-exec": "^3.1.9"
   },
-  "author": "lurich",
+  "author": "shlee",
   "license": "ISC",
   "repository": {
     "type": "git",
@@ -81,6 +82,7 @@
     "extends": null,
     "productName": "WebScoop",
     "appId": "com.lurich.WebScoop",
+    "copyright": "Copyright © 2026 shlee",
     "directories": {
       "output": "packs"
     },
@@ -88,7 +90,11 @@
     "files": [
       "build/**/*",
       "build-electron/**/*",
-      "public/**/*"
+      "public/**/*",
+      "!node_modules/**/*",
+      "!**/*.map",
+      "!build/imgs/**",
+      "!public/imgs/**"
     ],
     "mac": {
       "icon": "public/icon/icons/mac/icon.icns",
@@ -124,7 +130,18 @@
       "allowToChangeInstallationDirectory": true
     },
     "extraResources": [
-      "public"
+      {
+        "from": "public",
+        "to": "public",
+        "filter": [
+          "**/*",
+          "!imgs/**"
+        ]
+      },
+      {
+        "from": "node_modules/youtube-dl-exec/bin",
+        "to": "yt-dlp-bin"
+      }
     ]
   },
   "browserslist": {

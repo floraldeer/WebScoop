@@ -1,11 +1,19 @@
 import { app, BrowserWindow, Menu } from 'electron';
+import log from 'electron-log';
 import CONFIG from './const';
 import { checkUpdate } from './utils';
 import initIPC, { setWin } from './ipc';
 
 app.commandLine.appendSwitch('--no-proxy-server');
-process.on('uncaughtException', () => {});
-process.on('unhandledRejection', () => {});
+// 之前把这两个事件全静默了，导致 hoxy intercept 里任何异常都会被"吃掉"，
+// 主进程日志看不到任何 wx-req/feed-api 输出。改成打到 electron-log，保留原来的
+// "app 不因未处理异常闪退"的语义，但让排错有迹可循。
+process.on('uncaughtException', (err) => {
+  try { log.error('[uncaughtException]', err && err.stack || err); } catch (e) {}
+});
+process.on('unhandledRejection', (reason) => {
+  try { log.error('[unhandledRejection]', reason && reason.stack || reason); } catch (e) {}
+});
 
 function createWindow() {
   Menu.setApplicationMenu(null);

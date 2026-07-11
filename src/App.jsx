@@ -14,6 +14,8 @@ import {
   VideoCameraOutlined,
   ExclamationCircleOutlined,
   ExportOutlined,
+  FolderOpenOutlined,
+  CloseCircleOutlined,
 } from '@ant-design/icons';
 import fsm from './fsm';
 
@@ -49,10 +51,55 @@ function App() {
       message.warning(`请输入 ${supportedPlatformText} 视频链接`);
       return;
     }
-    // 视频号需要页面运行拿加密流，直接调浏览器播放触发本地代理捕获
-    if (/channels\.weixin\.qq\.com|finder\.video\.qq\.com/i.test(url)) {
-      shell.openExternal(url);
-      message.info('已用系统浏览器打开视频号页面，播放视频后会自动捕获到下方列表');
+    // 视频号：先直接命中 finder-preview API 拿元信息 + 可能的 videoUrl（登录态下有机会返回），
+    // 同时兜底打开内嵌浏览器让用户扫码登录后能在小窗里播放，主进程 hoxy 会自动挖到真视频链接。
+    if (/(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i.test(url)) {
+      setIsParsing(true);
+      ipcRenderer.invoke('invoke_解析视频号短链', url).then((data) => {
+        if (data.hasVideo && data.videoUrl) {
+          send({
+            type: 'e_视频捕获',
+            url: data.videoUrl,
+            size: 0,
+            description: data.description,
+            decodeKey: '',
+            hdUrl: null,
+            uploader: data.uploader,
+            platform: '微信视频号',
+            referer: data.referer,
+            noDecrypt: true,
+            coverUrl: data.coverUrl,
+            shareUrl: url,
+          });
+          message.success('视频号解析成功，已加入下载列表');
+          return;
+        }
+        // 匿名 API 只有元数据没 videoUrl：先在列表里插一张"信息卡"占位，
+        // 再打开内嵌浏览器让用户扫码。扫码后 hoxy 拦截到真 videoUrl 会自动合并到这张卡上。
+        if (data.description || data.uploader || data.coverUrl) {
+          send({
+            type: 'e_视频捕获',
+            url: '',
+            size: 0,
+            description: data.description || '视频号视频',
+            decodeKey: '',
+            hdUrl: null,
+            uploader: data.uploader,
+            platform: '微信视频号',
+            referer: data.referer,
+            noDecrypt: true,
+            coverUrl: data.coverUrl,
+            shareUrl: url,
+            infoOnly: true,
+          });
+        }
+        return ipcRenderer.invoke('invoke_打开视频号浏览器', url);
+      }).catch((err) => {
+        message.warning((err?.message || '视频号短链解析失败') + '，正在打开内嵌浏览器...');
+        ipcRenderer.invoke('invoke_打开视频号浏览器', url).catch(() => {});
+      }).finally(() => {
+        setIsParsing(false);
+      });
       return;
     }
     setIsParsing(true);
@@ -79,8 +126,36 @@ function App() {
 
   const openInBrowser = useCallback(() => {
     const url = inputUrl.trim() || 'https://channels.weixin.qq.com/';
+    // 视频号必须走内嵌浏览器（伪装微信 UA + 强制本地代理）；其他平台直接扔给系统浏览器即可。
+    // 兼容 weixin.qq.com/sph/... 等短链形态；空输入也走内嵌浏览器打开首页。
+    if (/(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i.test(url) || !inputUrl.trim()) {
+      ipcRenderer.invoke('invoke_打开视频号浏览器', url)
+        .catch((err) => message.error(err?.message || '打开视频号浏览器失败'));
+      return;
+    }
     shell.openExternal(url);
   }, [inputUrl]);
+
+  const clearInputUrl = useCallback(() => {
+    setInputUrl('');
+  }, []);
+
+  const openDownloadDir = useCallback(() => {
+    ipcRenderer.invoke('invoke_打开视频目录')
+      .catch(() => message.error('打开视频目录失败，请先下载一个视频'));
+  }, []);
+
+  const redownload = useCallback((record) => {
+    const { url, decodeKey, hdUrl, description, noDecrypt, referer } = record;
+    send({
+      type: 'e_下载',
+      url: hdUrl || url,
+      decodeKey,
+      description,
+      noDecrypt,
+      referer,
+    });
+  }, [send]);
 
   const isDownloading = state.matches('初始化完成.下载.下载中');
 
@@ -119,6 +194,16 @@ function App() {
                 <Input
                   placeholder={`粘贴视频分享链接后点【解析下载】，或点【浏览器打开】播放视频号自动捕获`}
                   prefix={<LinkOutlined style={{ color: '#94a3b8' }} />}
+                  suffix={
+                    inputUrl ? (
+                      <Tooltip title="一键清除地址">
+                        <CloseCircleOutlined
+                          className="address-clear-icon"
+                          onClick={clearInputUrl}
+                        />
+                      </Tooltip>
+                    ) : <span />
+                  }
                   value={inputUrl}
                   onChange={e => setInputUrl(e.target.value)}
                   onPressEnter={handleParseVideo}
@@ -133,6 +218,13 @@ function App() {
                 className="App-inited-go-btn"
               >
                 浏览器打开
+              </Button>
+              <Button
+                onClick={openDownloadDir}
+                icon={<FolderOpenOutlined />}
+                className="App-inited-go-btn"
+              >
+                打开目录
               </Button>
               <Button
                 type="primary"
@@ -159,8 +251,8 @@ function App() {
                   </Paragraph>
                   <Paragraph style={{ margin: '8px 0 0 0' }}>
                     <b>微信视频号：</b>
-                    点【浏览器打开】用系统浏览器（推荐 Safari / Chrome）打开视频号页面并播放视频；
-                    因为已经设置了系统代理，播放到的视频会被自动捕获到下方列表。
+                    点【浏览器打开】用内置微信视频号播放器打开并播放视频；
+                    内置播放器已伪装微信身份并强制走本地代理，播放到的视频会自动捕获到下方列表。
                   </Paragraph>
                 </div>
               }
@@ -198,7 +290,7 @@ function App() {
                   <Table
                     size="middle"
                     dataSource={captureList}
-                    rowKey={(record) => (record.hdUrl || record.url) + '|' + (record.decodeKey || '')}
+                    rowKey={(record) => (record.hdUrl || record.url || record.shareUrl || record.description) + '|' + (record.decodeKey || '')}
                     showHeader={false}
                     columns={[
                       {
@@ -223,6 +315,11 @@ function App() {
                                   <Tag color="success" icon={<StarOutlined />} className="hd-tag">HD</Tag>
                                 </Tooltip>
                               )}
+                              {record.infoOnly && (
+                                <Tooltip title="视频号短链未登录，只拿到元信息；扫码登录后自动补齐视频源">
+                                  <Tag color="warning" icon={<ExclamationCircleOutlined />} className="hd-tag">待登录</Tag>
+                                </Tooltip>
+                              )}
                             </div>
                             {record.uploader && (
                               <Text type="secondary" style={{ fontSize: 11 }} className="video-item-author">
@@ -244,22 +341,56 @@ function App() {
                       },
                       {
                         key: 'action',
-                        width: 88,
+                        width: 104,
                         align: 'center',
                         render: (_, record) => {
-                          const { url, decodeKey, hdUrl, description, fullFileName, noDecrypt, referer } = record;
+                          const { url, decodeKey, hdUrl, description, fullFileName, noDecrypt, referer, infoOnly, shareUrl } = record;
+                          if (infoOnly) {
+                            return (
+                              <Tooltip title="打开内嵌浏览器扫码登录后自动捕获">
+                                <Button
+                                  icon={<ExportOutlined />}
+                                  type="primary"
+                                  ghost
+                                  onClick={() => {
+                                    ipcRenderer.invoke('invoke_打开视频号浏览器', shareUrl || 'https://channels.weixin.qq.com/')
+                                      .catch((err) => message.error(err?.message || '打开视频号浏览器失败'));
+                                  }}
+                                  size="small"
+                                  className="download-btn"
+                                >
+                                  扫码登录
+                                </Button>
+                              </Tooltip>
+                            );
+                          }
                           return fullFileName ? (
-                            <Tooltip title="打开文件位置">
-                              <Button
-                                icon={<EyeOutlined />}
-                                type="default"
-                                onClick={() => shell.openPath(fullFileName)}
-                                size="small"
-                                className="view-btn"
-                              >
-                                查看
-                              </Button>
-                            </Tooltip>
+                            <Space size={4} direction="vertical" style={{ width: '100%' }}>
+                              <Tooltip title="打开文件位置">
+                                <Button
+                                  icon={<EyeOutlined />}
+                                  type="default"
+                                  onClick={() => shell.openPath(fullFileName)}
+                                  size="small"
+                                  className="view-btn"
+                                  block
+                                >
+                                  查看
+                                </Button>
+                              </Tooltip>
+                              <Tooltip title="文件已删除？重新下载">
+                                <Button
+                                  icon={<RedoOutlined />}
+                                  type="link"
+                                  onClick={() => redownload(record)}
+                                  size="small"
+                                  className="redownload-btn"
+                                  block
+                                >
+                                  再次下载
+                                </Button>
+                              </Tooltip>
+                            </Space>
                           ) : (
                             <Button
                               icon={<DownloadOutlined />}

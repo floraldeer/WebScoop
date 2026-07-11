@@ -144,7 +144,7 @@ export default createMachine(
       invoke_启动服务: () => send => {
         const fnDealVideoCapture = (eName, data) => {
           if (!data) return;
-          const { url, size, description, decode_key, hd_url, uploader, platform, referer, noDecrypt } = data;
+          const { url, size, description, decode_key, hd_url, uploader, platform, referer, noDecrypt, coverUrl, shareUrl, infoOnly } = data;
           send({
             type: 'e_视频捕获',
             url,
@@ -156,6 +156,9 @@ export default createMachine(
             platform,
             referer,
             noDecrypt,
+            coverUrl,
+            shareUrl,
+            infoOnly,
           });
         };
 
@@ -222,47 +225,90 @@ export default createMachine(
     },
     actions: {
       action_视频捕获: actions.assign(
-        ({ captureList }, { url, size, description, decodeKey, hdUrl, uploader, platform, referer, noDecrypt }) => {
-          if (!url) return {};
+        ({ captureList }, { url, size, description, decodeKey, hdUrl, uploader, platform, referer, noDecrypt, coverUrl, shareUrl, infoOnly }) => {
+          // infoOnly=true 表示只有元信息（视频号短链未登录场景），无 url 也允许入列表，
+          // 但要靠 shareUrl 作为唯一键，避免同一条视频号短链多次点解析时重复添加。
+          const primaryKey = url || shareUrl;
+          if (!primaryKey) return {};
           const newItem = {
             size: size || 0,
-            url,
+            url: url || '',
             hdUrl: hdUrl || null,
-            prettySize: size ? prettyBytes(+size) : '未知',
+            prettySize: size ? prettyBytes(+size) : (infoOnly ? '待登录' : '未知'),
             description: description || '未命名视频',
             decodeKey: decodeKey || '',
             uploader: uploader || '',
             platform: platform || '',
             referer: referer || '',
             noDecrypt: !!noDecrypt,
+            coverUrl: coverUrl || '',
+            shareUrl: shareUrl || '',
+            infoOnly: !!infoOnly,
           };
-          const dupKey = (newItem.url.split('?')[0] + '|' + newItem.size).trim();
+          // 视频号 CDN 所有视频同路径，靠稳定内容 id(encfilekey/filekey) 区分不同视频；
+          // token/idx/adaptivelvl 是同一视频的时效/清晰度变体，去重时须忽略，
+          // 否则同一视频不同来源(代理层/注入)或不同清晰度会变成"多个相同地址"。
+          const sameVideo = (a, b) => {
+            if (!a || !b) return false;
+            if (a === b) return true;
+            const idOf = (u) => {
+              const qs = u.split('?')[1] || '';
+              const m = qs.match(/(encfilekey|filekey)=[^&]+/gi);
+              return m ? 'finder|' + m.join('&') : u;
+            };
+            return idOf(a) === idOf(b);
+          };
+          const isGenericWechatTitle = (title = '') => /^(微信视频号视频|视频号视频|网络视频|未命名视频)$/.test(String(title).trim());
           const existingIndex = captureList.findIndex(item => {
-            const itemUrl = (item.hdUrl || item.url).split('?')[0];
-            const newUrl = (newItem.hdUrl || newItem.url).split('?')[0];
-            if (itemUrl === newUrl && item.size === newItem.size && item.size > 0) return true;
-            if (item.url.split('?')[0] === newItem.url.split('?')[0] && item.url) return true;
-            if (hdUrl && item.hdUrl && item.hdUrl.split('?')[0] === hdUrl.split('?')[0]) return true;
+            const itemUrl = item.hdUrl || item.url;
+            const newUrl = newItem.hdUrl || newItem.url;
+            if (sameVideo(itemUrl, newUrl)) return true;
+            if (sameVideo(item.url, newItem.url)) return true;
+            if (hdUrl && item.hdUrl && sameVideo(item.hdUrl, hdUrl)) return true;
             if (decodeKey && item.decodeKey && item.decodeKey === decodeKey && item.description === newItem.description) return true;
+            // infoOnly 占位卡与真视频合并：靠 shareUrl 或"同作者+同描述"识别
+            if (item.shareUrl && newItem.shareUrl && item.shareUrl === newItem.shareUrl) return true;
+            if (item.infoOnly && newItem.uploader && item.uploader && item.uploader === newItem.uploader && item.description === newItem.description) return true;
             return false;
           });
           if (existingIndex >= 0) {
             const existing = captureList[existingIndex];
-            if (hdUrl && !existing.hdUrl) {
-              const updated = [...captureList];
-              updated[existingIndex] = {
-                ...existing,
-                hdUrl: hdUrl,
-                size: size || existing.size,
-                prettySize: size ? prettyBytes(+size) : existing.prettySize,
-                url: url || existing.url,
-              };
-              return { captureList: updated };
-            }
-            return {};
+            const shouldUpdateTitle =
+              newItem.description &&
+              !isGenericWechatTitle(newItem.description) &&
+              isGenericWechatTitle(existing.description);
+            const gainedRealUrl = existing.infoOnly && newItem.url;
+            const shouldUpdate =
+              gainedRealUrl ||
+              (hdUrl && !existing.hdUrl) ||
+              shouldUpdateTitle ||
+              (newItem.uploader && !existing.uploader) ||
+              ((newItem.size || 0) > (existing.size || 0));
+            if (!shouldUpdate) return {};
+            const updated = [...captureList];
+            updated[existingIndex] = {
+              ...existing,
+              hdUrl: hdUrl || existing.hdUrl,
+              size: newItem.size || existing.size,
+              prettySize: newItem.size ? prettyBytes(+newItem.size) : existing.prettySize,
+              url: newItem.url || existing.url,
+              description: shouldUpdateTitle ? newItem.description : existing.description,
+              uploader: newItem.uploader || existing.uploader,
+              referer: newItem.referer || existing.referer,
+              noDecrypt: existing.noDecrypt && newItem.noDecrypt,
+              coverUrl: newItem.coverUrl || existing.coverUrl,
+              shareUrl: newItem.shareUrl || existing.shareUrl,
+              infoOnly: existing.infoOnly && !newItem.url,
+            };
+            if (gainedRealUrl) message.success(`视频号真链已捕获: ${updated[existingIndex].description}`);
+            return { captureList: updated };
           }
           const platformTag = newItem.platform ? `[${newItem.platform}] ` : '';
-          message.success(`捕获到视频: ${platformTag}${newItem.description}`);
+          if (newItem.infoOnly) {
+            message.info(`已识别视频号元信息: ${platformTag}${newItem.description}（扫码登录后自动补齐视频源）`);
+          } else {
+            message.success(`捕获到视频: ${platformTag}${newItem.description}`);
+          }
           return {
             captureList: [newItem, ...captureList],
           };
