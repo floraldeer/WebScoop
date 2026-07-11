@@ -44,7 +44,7 @@ const injection_html = `
 `;
 
 // 注入到页面里的脚本：hook fetch/XHR/WeixinJSBridge，把 JSON 里的视频信息发到 aaaa.com
-// 这份是 c2bb650 baseline 版本（当年能稳定抓到），加了少量诊断 wlog 便于日志分析。
+// 只有真正被播放器加载/播放过的视频才推给主窗口——避免打开个人主页就把整个 feed 列表全部推入。
 const WVDS_INJECT_SCRIPT = `
 (function() {
   'use strict';
@@ -54,6 +54,11 @@ const WVDS_INJECT_SCRIPT = `
   var RECEIVER_URL = 'https://aaaa.com';
   var LOG_URL = 'https://wvds-log.aaaa.com';
   var capturedSet = {};
+
+  // 待推候选池：finderH5ExtTransfer 一次能吐一整页的 media 对象，我们全部先记下 encfilekey/decode_key，
+  // 但**不推**给主进程；等 <video> 元素真的开始加载/播放某个 URL 时，再从池里按 encfilekey 匹配"这条正在放的"推出去。
+  // 这样个人主页刷新时只有当前 hover 播放的那条才进列表，不会一次性 20 条全冒。
+  var pendingByKey = {};
 
   function wlog(tag, payload) {
     try {
@@ -67,26 +72,66 @@ const WVDS_INJECT_SCRIPT = `
 
   wlog('inject-boot', { ua: navigator.userAgent.slice(0, 120) });
 
-  function sendVideoData(data) {
+  function extractEncKey(u) {
+    if (!u) return '';
+    var m = String(u).match(/[?&]encfilekey=([^&#]+)/);
+    return m ? m[1] : '';
+  }
+
+  function actuallySend(data) {
     if (!data || !data.url) return;
     var desc = (data.description || '未命名视频').trim();
-    var keyBase = desc + '|' + (data.size || 0);
-    if (capturedSet[keyBase]) {
-      if (data.hd_url && !capturedSet[keyBase + '|hd']) {
-        capturedSet[keyBase + '|hd'] = true;
-      } else {
-        return;
-      }
-    }
+    var keyBase = desc + '|' + (data.decode_key || '');
+    if (capturedSet[keyBase]) return;
     capturedSet[keyBase] = true;
-    if (data.decode_key) capturedSet['dk|' + data.decode_key] = true;
-    wlog('capture', { desc: desc, size: data.size, hasKey: !!data.decode_key, url: (data.url || '').slice(0, 160) });
+    var out = {
+      url: data.url,
+      hd_url: data.hd_url,
+      size: data.size,
+      description: desc,
+      decode_key: data.decode_key,
+      uploader: data.uploader,
+    };
+    wlog('capture', { desc: desc, size: out.size, hasKey: !!out.decode_key, url: (out.url || '').slice(0, 160) });
     try {
       fetch(RECEIVER_URL, {
         method: 'POST', mode: 'no-cors', cache: 'no-cache',
-        body: JSON.stringify(data),
+        body: JSON.stringify(out),
       });
     } catch(e) {}
+  }
+
+  // 只入池、不外发；等到 <video> 播这条时 flushByEncKey 再发
+  // stashCandidate 记录的是"这条视频所有可能的 encfilekey"，因为 <video>.currentSrc 可能命中 SD/HD/spec 任一档。
+  function stashCandidate(data) {
+    if (!data || !data.url) return;
+    var keys = [];
+    var k1 = extractEncKey(data.url);
+    var k2 = extractEncKey(data.hd_url);
+    if (k1) keys.push(k1);
+    if (k2 && k2 !== k1) keys.push(k2);
+    if (data._extraKeys && data._extraKeys.length) {
+      for (var i = 0; i < data._extraKeys.length; i++) {
+        var ek = data._extraKeys[i];
+        if (ek && keys.indexOf(ek) === -1) keys.push(ek);
+      }
+    }
+    if (!keys.length) return;
+    for (var j = 0; j < keys.length; j++) pendingByKey[keys[j]] = data;
+    wlog('stash', { keys: keys.length, key0: keys[0].slice(0, 40), desc: (data.description || '').slice(0, 40), hasKey: !!data.decode_key });
+  }
+
+  function flushByEncKey(key) {
+    if (!key) return;
+    var data = pendingByKey[key];
+    if (!data) { wlog('flush-miss', { key: key.slice(0, 40) }); return; }
+    delete pendingByKey[key];
+    actuallySend(data);
+  }
+
+  // 主入口：extractVideoFromObject 会调这个 —— 只入池，播放器触发时才推
+  function sendVideoData(data) {
+    stashCandidate(data);
   }
 
   function extractVideoFromObject(obj, depth) {
@@ -116,11 +161,16 @@ const WVDS_INJECT_SCRIPT = `
         var urlToken = media.url_token || media.urlToken || '';
         var hdUrl = '';
         var hdToken = '';
-        // spec_video[] 里通常有多档，选 file_size 最大的当 hd
+        var extraKeys = [];
+        // spec_video[] 里通常有多档，选 file_size 最大的当 hd，同时把每一档的 encfilekey 收集起来，
+        // 因为播放器最终真正读的可能是任意一档（HD/SD/自适应），任何一档命中都要能 flush 到同一条卡片。
         var spec = media.spec_video || media.specVideo || media.spec_videos || [];
         if (spec && spec.length) {
           var best = spec[0];
           for (var si = 0; si < spec.length; si++) {
+            var uu = spec[si].url || spec[si].Url || '';
+            var ekk = extractEncKey(uu);
+            if (ekk) extraKeys.push(ekk);
             if ((spec[si].file_size || spec[si].fileSize || 0) > (best.file_size || best.fileSize || 0)) best = spec[si];
           }
           hdUrl = best.url || best.Url || mediaUrl;
@@ -136,6 +186,7 @@ const WVDS_INJECT_SCRIPT = `
           size: media.file_size || media.fileSize || 0,
           description: (descText || '未命名视频').toString().trim().slice(0, 120) || '未命名视频',
           uploader: nickname,
+          _extraKeys: extraKeys,
         };
         // 有 decode_key 才推给主进程；没 key 的裸 CDN URL 下载出来是加密字节
         if (payload.url && payload.decode_key) {
@@ -277,6 +328,50 @@ const WVDS_INJECT_SCRIPT = `
     hookFetch();
     hookXHR();
     hookWeixinJSBridge();
+    hookVideoElements();
+  }
+
+  // 观察 <video> 元素的 src / loadstart / play：任何一个 src 里带 encfilekey，
+  // 就把候选池中对应那条推给主进程。这样只有正在真正播放/加载的视频才会进下载列表。
+  function hookVideoElements() {
+    if (window.__wvds_video_hooked) return;
+    window.__wvds_video_hooked = true;
+
+    function bindOne(v) {
+      if (!v || v.__wvds_bound) return;
+      v.__wvds_bound = true;
+      var events = ['loadstart', 'loadedmetadata', 'play', 'playing', 'canplay'];
+      events.forEach(function(ev) {
+        v.addEventListener(ev, function() {
+          try {
+            var src = v.currentSrc || v.src || '';
+            var k = extractEncKey(src);
+            if (k) flushByEncKey(k);
+          } catch(e) {}
+        }, true);
+      });
+      // 主动读一次
+      try {
+        var src = v.currentSrc || v.src || '';
+        var k = extractEncKey(src);
+        if (k) flushByEncKey(k);
+      } catch(e) {}
+    }
+
+    function scan() {
+      try {
+        var list = document.querySelectorAll('video');
+        for (var i = 0; i < list.length; i++) bindOne(list[i]);
+      } catch(e) {}
+    }
+    scan();
+    setInterval(scan, 1500);
+
+    try {
+      var mo = new MutationObserver(function() { scan(); });
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    } catch(e) {}
+    wlog('video-hooked');
   }
 
   tryInitHooks();
@@ -596,19 +691,10 @@ export async function startServer({ win, setProxyErrorCallback = f => f }) {
             walkMedia(json, { description: '', uploader: '' }, 0);
             if (hits.length) {
               info('feed-api-video-hit', 'count=' + hits.length + ' first=' + hits[0].url.slice(0, 120));
-              for (const h of hits) {
-                sendCapture({
-                  url: h.url,
-                  size: h.size,
-                  description: h.description || '微信视频号视频',
-                  decode_key: h.decode_key,
-                  hd_url: h.hd_url,
-                  uploader: h.uploader,
-                  platform: '微信视频号',
-                  referer: 'https://channels.weixin.qq.com/',
-                  noDecrypt: false,
-                });
-              }
+              // 注意：这里不再全量 sendCapture。一次 finderH5ExtTransfer 响应能返回整页 20+ 条 media，
+              // 全部推给 UI 会导致个人主页一打开就冒 20 条卡片。真正的入口是注入脚本 (WVDS_INJECT_SCRIPT)：
+              // 只有 <video> 元素真的在加载/播放某条 encfilekey 时才 flush 到 UI。
+              // 若日后需要"侵入式全量入列表"，通过 DEBUG_WX 或额外开关再开。
             } else {
               info('feed-api-video-miss', 'no {media,decode_key} in response');
             }

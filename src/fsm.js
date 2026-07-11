@@ -265,7 +265,9 @@ export default createMachine(
             if (sameVideo(itemUrl, newUrl)) return true;
             if (sameVideo(item.url, newItem.url)) return true;
             if (hdUrl && item.hdUrl && sameVideo(item.hdUrl, hdUrl)) return true;
-            if (decodeKey && item.decodeKey && item.decodeKey === decodeKey && item.description === newItem.description) return true;
+            // 视频号 decode_key 是每条视频独有的 AES key，全局唯一 —— 同 decodeKey 一定是同视频，
+            // 不同 encfilekey/清晰度/描述都不能作为区分依据（之前遇到过标题被截断到不同长度导致重复入列表）。
+            if (decodeKey && item.decodeKey && item.decodeKey === decodeKey) return true;
             // infoOnly 占位卡与真视频合并：靠 shareUrl 或"同作者+同描述"识别
             if (item.shareUrl && newItem.shareUrl && item.shareUrl === newItem.shareUrl) return true;
             if (item.infoOnly && newItem.uploader && item.uploader && item.uploader === newItem.uploader && item.description === newItem.description) return true;

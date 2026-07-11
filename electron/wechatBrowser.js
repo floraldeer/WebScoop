@@ -72,23 +72,8 @@ async function collectWechatCookies(ses) {
   }
 }
 
-// 把原始短链改造成能实际播放的电脑网页版 URL。
-// 登录后，只有 /web/pages/feed?exportId=... 才会真正渲染播放器并拉视频流；
-// /finder-preview/pages/sph?id=... 无论登录与否都是二维码引导页。
-async function resolvePlayableUrl(inputUrl, ses) {
-  if (!inputUrl) return 'https://channels.weixin.qq.com/';
-  const cookieHeader = await collectWechatCookies(ses);
-  try {
-    const resolved = await resolveWechatPlayableUrl(inputUrl, { cookieHeader });
-    if (resolved && resolved.playableUrl) {
-      log.info('[wxwin] resolved playableUrl=' + resolved.playableUrl.slice(0, 160));
-      return resolved.playableUrl;
-    }
-  } catch (err) {
-    log.warn('[wxwin] resolvePlayableUrl fail:', String(err && err.message || err));
-  }
-  return inputUrl;
-}
+// 把原始短链改造成能实际播放的电脑网页版 URL 的逻辑，改由 resolveAndSwitch 在后台异步执行，
+// 见文件底部 —— 之前是同步 await 才第一次 loadURL，一旦短链解析超时小窗就白屏。
 
 export async function openWechatBrowser(url) {
   const port = getCurrentProxyPort();
@@ -101,17 +86,28 @@ export async function openWechatBrowser(url) {
   ses.setCertificateVerifyProc((_req, cb) => cb(0));
 
   const loggedIn = await isLoggedIn(ses);
-  // 未登录：桌面 UA 打开登录页，让用户扫码；登录成功后触发 tryPostLoginRedirect 再切 UA。
-  // 已登录：先把短链换成 /web/pages/feed?exportId=... 真播放页，再用 WindowsWechat UA 打开。
-  const initialTarget = loggedIn ? await resolvePlayableUrl(wantedTarget, ses) : LOGIN_PAGE;
+  // 未登录：桌面 UA 直接打开登录页扫码；
+  // 已登录：立刻用 wantedTarget（可能是 /sph/ 或已是 /web/pages/feed）打开，
+  //   页面加载的**同时**在后台异步跑短链解析，拿到 exportId 再切到真播放页；
+  //   —— 之前是同步 await resolvePlayableUrl 才第一次 loadURL，一旦短链解析慢就白屏。
+  const initialTarget = loggedIn ? wantedTarget : LOGIN_PAGE;
   const initialUA = loggedIn ? WX_UA : DESKTOP_UA;
   ses.setUserAgent(initialUA);
 
   log.info('[wxwin] open loggedIn=' + loggedIn, 'wanted=' + wantedTarget, 'initial=' + initialTarget);
 
   if (win && !win.isDestroyed()) {
+    // 窗口可能被最小化或被主窗口遮挡：restore + show + moveTop + focus 一起来才能保证前置
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.moveTop();
     win.focus();
-    win.loadURL(initialTarget, { userAgent: initialUA });
+    // 若目标 URL 变了才重新 loadURL；同 URL 时用户可能只想把窗口拉回前台，避免打断当前播放
+    const curUrl = win.webContents?.getURL?.() || '';
+    if (curUrl !== initialTarget) {
+      win.loadURL(initialTarget, { userAgent: initialUA });
+    }
+    if (loggedIn) resolveAndSwitch(win, ses, wantedTarget);
     return;
   }
 
@@ -144,18 +140,23 @@ export async function openWechatBrowser(url) {
   });
 
   // 登录成功探测：URL 从 login.html 跳走 / 有 sessionid cookie 时，
-  // 立即用 wechatFinder 把 wantedTarget 转成能播放的 /web/pages/feed 页并切 UA 载入。
+  // 立即切成 WX_UA 并把 wantedTarget 换成能播放的 /web/pages/feed 页。
+  // 加防重入锁 —— cookies.on('changed') 会连续触发几十次，之前每次都 loadURL 会把页面初始化打断。
+  let postLoginDone = false;
   const tryPostLoginRedirect = async () => {
+    if (postLoginDone) return;
     if (!win || win.isDestroyed()) return;
     const curUrl = wc.getURL();
     if (!/login\.html/i.test(curUrl)) return;
     const nowLoggedIn = await isLoggedIn(ses);
     if (!nowLoggedIn) return;
-    const playableUrl = await resolvePlayableUrl(wantedTarget, ses);
-    log.info('[wxwin] login-detected, redirecting to', playableUrl);
+    postLoginDone = true;
+    log.info('[wxwin] login-detected, switching UA and resolving playable URL');
     ses.setUserAgent(WX_UA);
     win.setTitle('视频号');
-    win.loadURL(playableUrl, { userAgent: WX_UA });
+    // 先直接把 wantedTarget 塞进去（能立刻显示"加载中"给用户），再异步解析拿 exportId 后切真播放页
+    win.loadURL(wantedTarget, { userAgent: WX_UA });
+    resolveAndSwitch(win, ses, wantedTarget);
   };
   wc.on('did-navigate', tryPostLoginRedirect);
   wc.on('did-navigate-in-page', tryPostLoginRedirect);
@@ -163,10 +164,32 @@ export async function openWechatBrowser(url) {
 
   win.on('closed', () => { win = null; });
 
-  // DevTools 仅在环境变量 DEBUG_WX=1 时开启，避免正式使用时吓到用户
   if (process.env.DEBUG_WX === '1') {
     wc.openDevTools({ mode: 'detach' });
   }
 
   win.loadURL(initialTarget, { userAgent: initialUA });
+  // 已登录场景：后台异步解析短链，避免同步 await 卡住首次 loadURL
+  if (loggedIn) resolveAndSwitch(win, ses, wantedTarget);
+}
+
+// 异步把 wantedTarget（可能是短链或 /sph/）解析成真播放页 /web/pages/feed?exportId=...，
+// 拿到就切一次 loadURL；解析失败或超时就保持当前页不动。
+async function resolveAndSwitch(targetWin, ses, wantedTarget) {
+  try {
+    if (!/weixin\.qq\.com/i.test(wantedTarget)) return;
+    if (/\/web\/pages\/feed/i.test(wantedTarget)) return;
+    const cookieHeader = await collectWechatCookies(ses);
+    const resolved = await Promise.race([
+      resolveWechatPlayableUrl(wantedTarget, { cookieHeader }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+    ]);
+    if (!resolved || !resolved.playableUrl) return;
+    if (resolved.playableUrl === wantedTarget) return;
+    if (!targetWin || targetWin.isDestroyed()) return;
+    log.info('[wxwin] resolved playableUrl=' + resolved.playableUrl.slice(0, 160));
+    targetWin.loadURL(resolved.playableUrl, { userAgent: WX_UA });
+  } catch (err) {
+    log.warn('[wxwin] resolveAndSwitch fail:', String(err && err.message || err));
+  }
 }
