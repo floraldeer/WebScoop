@@ -17,7 +17,7 @@ if (process.platform === 'win32') {
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // electron-log 落盘：macOS ~/Library/Logs/webscoop/main.log
-const BUILD_TAG = '2.2.4';
+const BUILD_TAG = '2.2.6';
 const DEBUG_WX = process.env.DEBUG_WX === '1';
 try {
   log.transports.file.level = 'info';
@@ -340,22 +340,26 @@ const WVDS_INJECT_SCRIPT = `
     function bindOne(v) {
       if (!v || v.__wvds_bound) return;
       v.__wvds_bound = true;
-      var events = ['loadstart', 'loadedmetadata', 'play', 'playing', 'canplay'];
+      // 视频号 SPA 换视频时通常复用同一个 <video>，只改 currentSrc；有的路径不重派 loadstart。
+      // 因此除了播放事件外，还监听 emptied/ratechange/durationchange/timeupdate，以及用
+      // MutationObserver 观察 src 属性变化：任何一个能"感知到当前正在放的是哪一条 encfilekey"
+      // 的信号都触发一次 flushByEncKey，配合去重保证同一条不会重复推。
+      function tryFlush() {
+        try {
+          var src = v.currentSrc || v.src || '';
+          var k = extractEncKey(src);
+          if (k) flushByEncKey(k);
+        } catch(e) {}
+      }
+      var events = ['loadstart', 'loadedmetadata', 'play', 'playing', 'canplay', 'emptied', 'durationchange', 'ratechange', 'timeupdate'];
       events.forEach(function(ev) {
-        v.addEventListener(ev, function() {
-          try {
-            var src = v.currentSrc || v.src || '';
-            var k = extractEncKey(src);
-            if (k) flushByEncKey(k);
-          } catch(e) {}
-        }, true);
+        v.addEventListener(ev, tryFlush, true);
       });
-      // 主动读一次
       try {
-        var src = v.currentSrc || v.src || '';
-        var k = extractEncKey(src);
-        if (k) flushByEncKey(k);
+        var vmo = new MutationObserver(tryFlush);
+        vmo.observe(v, { attributes: true, attributeFilter: ['src'] });
       } catch(e) {}
+      tryFlush();
     }
 
     function scan() {

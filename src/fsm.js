@@ -230,6 +230,9 @@ export default createMachine(
           // 但要靠 shareUrl 作为唯一键，避免同一条视频号短链多次点解析时重复添加。
           const primaryKey = url || shareUrl;
           if (!primaryKey) return {};
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const capturedAt = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
           const newItem = {
             size: size || 0,
             url: url || '',
@@ -244,6 +247,7 @@ export default createMachine(
             coverUrl: coverUrl || '',
             shareUrl: shareUrl || '',
             infoOnly: !!infoOnly,
+            capturedAt,
           };
           // 视频号 CDN 所有视频同路径，靠稳定内容 id(encfilekey/filekey) 区分不同视频；
           // token/idx/adaptivelvl 是同一视频的时效/清晰度变体，去重时须忽略，

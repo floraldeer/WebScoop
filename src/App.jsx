@@ -326,6 +326,11 @@ function App() {
                                 @{record.uploader}
                               </Text>
                             )}
+                            {record.capturedAt && (
+                              <Text type="secondary" style={{ fontSize: 11 }} className="video-item-captured-at">
+                                捕获于 {record.capturedAt}
+                              </Text>
+                            )}
                           </div>
                         ),
                         ellipsis: true,
