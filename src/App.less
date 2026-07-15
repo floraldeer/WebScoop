@@ -411,35 +411,43 @@ body {
 
     &-download {
       position: fixed;
-      left: 0;
-      top: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(15, 23, 42, 0.55);
-      backdrop-filter: blur(4px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 999999;
+      right: 20px;
+      bottom: 20px;
+      z-index: 1000;
+      pointer-events: none;
 
       &-content {
         background: @card-bg;
-        padding: 36px 48px;
-        border-radius: @radius-lg;
-        text-align: center;
+        padding: 14px 16px;
+        border-radius: @radius-md;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 260px;
+        border: 1px solid @border-color;
         box-shadow: @shadow-lg;
       }
 
       &-ring {
-        margin-bottom: 16px;
         display: flex;
         justify-content: center;
+        flex-shrink: 0;
+      }
+
+      &-copy {
+        min-width: 0;
       }
 
       &-text {
         font-size: 14px;
+        color: @text-primary;
+        font-weight: 600;
+      }
+
+      &-hint {
+        margin-top: 3px;
+        font-size: 12px;
         color: @text-secondary;
-        font-weight: 500;
       }
     }
   }

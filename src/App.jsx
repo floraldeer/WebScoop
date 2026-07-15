@@ -41,7 +41,7 @@ const supportedPlatformText = '视频号、抖音、小红书、快手、B站、
 
 function App() {
   const [state, send] = useMachine(fsm);
-  const { captureList, downloadProgress } = state.context;
+  const { captureList, currentUrl, downloadProgress } = state.context;
   const [inputUrl, setInputUrl] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
@@ -388,6 +388,7 @@ function App() {
                                   icon={<RedoOutlined />}
                                   type="link"
                                   onClick={() => redownload(record)}
+                                  disabled={isDownloading}
                                   size="small"
                                   className="redownload-btn"
                                   block
@@ -411,6 +412,8 @@ function App() {
                                   referer,
                                 });
                               }}
+                              loading={isDownloading && currentUrl === (hdUrl || url)}
+                              disabled={isDownloading && currentUrl !== (hdUrl || url)}
                               size="small"
                               className="download-btn"
                             >
@@ -434,12 +437,15 @@ function App() {
                   <Progress
                     type="circle"
                     percent={downloadProgress}
-                    width={88}
+                    width={56}
                     strokeColor={{ '0%': '#6366f1', '100%': '#4f46e5' }}
                     format={(percent) => `${percent}%`}
                   />
                 </div>
-                <div className="App-inited-download-text">正在下载视频...</div>
+                <div className="App-inited-download-copy">
+                  <div className="App-inited-download-text">后台下载中...</div>
+                  <div className="App-inited-download-hint">可继续浏览、解析和捕获视频</div>
+                </div>
               </div>
             </div>
           ) : null}

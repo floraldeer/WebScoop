@@ -95,6 +95,9 @@ export default createMachine(
               },
               下载中: {
                 on: {
+                  e_下载: {
+                    actions: 'action_下载中提示',
+                  },
                   e_进度变化: {
                     actions: 'action_进度变化',
                   },
@@ -354,6 +357,9 @@ export default createMachine(
         message.error('下载失败，请重试');
         return { downloadProgress: 0 };
       }),
+      action_下载中提示: () => {
+        message.info('当前已有下载任务在后台进行，请稍后再下载下一条');
+      },
     },
   },
 );
