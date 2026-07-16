@@ -41,7 +41,7 @@ const supportedPlatformText = '视频号、抖音、小红书、快手、B站、
 
 function App() {
   const [state, send] = useMachine(fsm);
-  const { captureList, currentUrl, downloadProgress } = state.context;
+  const { captureList, currentUrl, downloadProgress, downloadQueue } = state.context;
   const [inputUrl, setInputUrl] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
@@ -350,6 +350,9 @@ function App() {
                         align: 'center',
                         render: (_, record) => {
                           const { url, decodeKey, hdUrl, description, fullFileName, noDecrypt, referer, infoOnly, shareUrl } = record;
+                          const downloadUrl = hdUrl || url;
+                          const isCurrentDownload = isDownloading && currentUrl === downloadUrl;
+                          const isQueued = downloadQueue.some(item => item.url === downloadUrl);
                           if (infoOnly) {
                             return (
                               <Tooltip title="打开内嵌浏览器扫码登录后自动捕获">
@@ -388,12 +391,12 @@ function App() {
                                   icon={<RedoOutlined />}
                                   type="link"
                                   onClick={() => redownload(record)}
-                                  disabled={isDownloading}
+                                  loading={isCurrentDownload}
                                   size="small"
                                   className="redownload-btn"
                                   block
                                 >
-                                  再次下载
+                                  {isQueued ? '排队中' : '再次下载'}
                                 </Button>
                               </Tooltip>
                             </Space>
@@ -402,7 +405,6 @@ function App() {
                               icon={<DownloadOutlined />}
                               type="primary"
                               onClick={() => {
-                                const downloadUrl = hdUrl || url;
                                 send({
                                   type: 'e_下载',
                                   url: downloadUrl,
@@ -412,12 +414,11 @@ function App() {
                                   referer,
                                 });
                               }}
-                              loading={isDownloading && currentUrl === (hdUrl || url)}
-                              disabled={isDownloading && currentUrl !== (hdUrl || url)}
+                              loading={isCurrentDownload}
                               size="small"
                               className="download-btn"
                             >
-                              下载
+                              {isQueued ? '排队中' : '下载'}
                             </Button>
                           );
                         },
@@ -444,7 +445,9 @@ function App() {
                 </div>
                 <div className="App-inited-download-copy">
                   <div className="App-inited-download-text">后台下载中...</div>
-                  <div className="App-inited-download-hint">可继续浏览、解析和捕获视频</div>
+                  <div className="App-inited-download-hint">
+                    可继续浏览、解析和捕获视频{downloadQueue.length ? `，队列 ${downloadQueue.length} 条` : ''}
+                  </div>
                 </div>
               </div>
             </div>

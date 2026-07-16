@@ -15,6 +15,7 @@ export default createMachine(
       description: '',
       noDecrypt: false,
       referer: '',
+      downloadQueue: [],
     },
     initial: '检测初始化',
     states: {
@@ -96,23 +97,41 @@ export default createMachine(
               下载中: {
                 on: {
                   e_下载: {
-                    actions: 'action_下载中提示',
+                    actions: 'action_加入下载队列',
                   },
                   e_进度变化: {
                     actions: 'action_进度变化',
                   },
-                  e_下载完成: {
-                    target: '#初始化完成.空闲',
-                    actions: 'action_下载完成',
-                  },
-                  e_下载失败: {
-                    target: '#初始化完成.空闲',
-                    actions: 'action_下载失败',
-                  },
+                  e_下载完成: [
+                    {
+                      cond: 'hasDownloadQueue',
+                      target: '队列下一条',
+                      actions: 'action_下载完成',
+                    },
+                    {
+                      target: '#初始化完成.空闲',
+                      actions: 'action_下载完成',
+                    },
+                  ],
+                  e_下载失败: [
+                    {
+                      cond: 'hasDownloadQueue',
+                      target: '队列下一条',
+                      actions: 'action_下载失败',
+                    },
+                    {
+                      target: '#初始化完成.空闲',
+                      actions: 'action_下载失败',
+                    },
+                  ],
                 },
                 invoke: {
                   src: 'invoke_下载视频',
                 },
+              },
+              队列下一条: {
+                entry: 'action_设置队列下一条',
+                always: '下载中',
               },
             },
           },
@@ -333,6 +352,38 @@ export default createMachine(
           description: description || '',
           noDecrypt: !!noDecrypt,
           referer: referer || '',
+          downloadProgress: 0,
+        };
+      }),
+      action_加入下载队列: actions.assign(({ currentUrl, downloadQueue }, { url, decodeKey, description, noDecrypt, referer }) => {
+        if (!url) return {};
+        const queueItem = {
+          url,
+          decodeKey: decodeKey || '',
+          description: description || '',
+          noDecrypt: !!noDecrypt,
+          referer: referer || '',
+        };
+        const existsInQueue = downloadQueue.some(item => item.url === queueItem.url);
+        if (currentUrl === queueItem.url || existsInQueue) {
+          message.info('该视频已在下载中或队列中');
+          return {};
+        }
+        message.success(`已加入下载队列: ${queueItem.description || '视频'}`);
+        return { downloadQueue: [...downloadQueue, queueItem] };
+      }),
+      action_设置队列下一条: actions.assign(({ downloadQueue }) => {
+        const [nextItem, ...restQueue] = downloadQueue;
+        if (!nextItem) return { downloadProgress: 0 };
+        message.info(`开始下载队列下一条: ${nextItem.description || '视频'}`);
+        return {
+          currentUrl: nextItem.url,
+          decodeKey: nextItem.decodeKey || '',
+          description: nextItem.description || '',
+          noDecrypt: !!nextItem.noDecrypt,
+          referer: nextItem.referer || '',
+          downloadProgress: 0,
+          downloadQueue: restQueue,
         };
       }),
       action_存储下载位置: actions.assign((_, { data }) => {
@@ -357,9 +408,9 @@ export default createMachine(
         message.error('下载失败，请重试');
         return { downloadProgress: 0 };
       }),
-      action_下载中提示: () => {
-        message.info('当前已有下载任务在后台进行，请稍后再下载下一条');
-      },
+    },
+    guards: {
+      hasDownloadQueue: ({ downloadQueue }) => downloadQueue.length > 0,
     },
   },
 );

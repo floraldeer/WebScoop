@@ -17,7 +17,7 @@ if (process.platform === 'win32') {
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // electron-log 落盘：macOS ~/Library/Logs/webscoop/main.log
-const BUILD_TAG = '2.2.7';
+const BUILD_TAG = '2.2.8';
 const DEBUG_WX = process.env.DEBUG_WX === '1';
 try {
   log.transports.file.level = 'info';
