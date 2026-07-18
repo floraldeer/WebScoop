@@ -101,7 +101,7 @@ function walkFindVideoUrl(node, out, depth = 0) {
 
 // 主进程 IPC 入口：解析视频号短链拿元信息 + 可能的视频 URL，供 UI 直接展示。
 export async function parseWechatShortLink(inputUrl) {
-  const { body, referer } = await callFeedInfoApi(inputUrl);
+  const { body, referer, shortUri, exportId } = await callFeedInfoApi(inputUrl);
   log.info('[wxapi] resp errCode=' + body.errCode, 'keys=' + JSON.stringify(Object.keys(body.data || {})));
   if (body.errCode && body.errCode !== 0) {
     throw new Error(`视频号接口返回错误：${body.errMsg || body.errCode}`);
@@ -109,6 +109,7 @@ export async function parseWechatShortLink(inputUrl) {
   const data = body.data || {};
   const feed = data.feedInfo || {};
   const author = data.authorInfo || {};
+  const scene = data.sceneInfo || {};
 
   const found = [];
   walkFindVideoUrl(data, found);
@@ -123,6 +124,8 @@ export async function parseWechatShortLink(inputUrl) {
     createTime: feed.createtime || 0,
     hasVideo: !!videoUrl,
     referer,
+    shortUri,
+    dynamicExportId: scene.dynamicExportId || exportId || '',
     rawKeys: Object.keys(feed),
   };
 }

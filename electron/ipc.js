@@ -1,8 +1,8 @@
-import { ipcMain, dialog, shell, app } from 'electron';
+import { ipcMain, dialog, shell, app, clipboard } from 'electron';
 import log from 'electron-log';
 import { throttle } from 'lodash';
 import axios from 'axios';
-import { startServer } from './proxyServer';
+import { startServer, setWechatCaptureTarget } from './proxyServer';
 import { installCert, checkCertInstalled } from './cert';
 import { downloadFile } from './utils';
 import { parsePlatformVideo } from './platformParsers';
@@ -73,6 +73,30 @@ export default function initIPC() {
     } catch (err) {
       log.error('open wechat browser failed:', err);
       throw new Error(err?.message || '打开视频号浏览器失败');
+    }
+  });
+
+  ipcMain.handle('invoke_在微信中打开', async (event, input) => {
+    const target = typeof input === 'string' ? { url: input } : (input || {});
+    const url = String(target.url || '').trim();
+    if (!/^https?:\/\//i.test(url)) {
+      throw new Error('视频号链接无效');
+    }
+
+    setWechatCaptureTarget({
+      shareUrl: url,
+      description: target.description || '',
+      uploader: target.uploader || '',
+      shortUri: target.shortUri || '',
+      dynamicExportId: target.dynamicExportId || '',
+    });
+    clipboard.writeText(url);
+    try {
+      await shell.openExternal('weixin://');
+      return { copied: true, launched: true };
+    } catch (err) {
+      log.error('launch desktop wechat failed:', err);
+      throw new Error('链接已复制，但未能唤起桌面微信，请确认微信已安装');
     }
   });
 

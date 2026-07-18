@@ -45,14 +45,31 @@ function App() {
   const [inputUrl, setInputUrl] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
+  const openInWechat = useCallback(async (url, target = {}) => {
+    try {
+      await ipcRenderer.invoke('invoke_在微信中打开', {
+        url,
+        description: target.description || '',
+        uploader: target.uploader || '',
+        shortUri: target.shortUri || '',
+        dynamicExportId: target.dynamicExportId || '',
+      });
+      message.info('链接已复制并唤起微信，请粘贴发送后打开视频并播放');
+      return true;
+    } catch (err) {
+      message.error(err?.message || '唤起桌面微信失败');
+      return false;
+    }
+  }, []);
+
   const handleParseVideo = useCallback(() => {
     const url = inputUrl.trim();
     if (!url) {
       message.warning(`请输入 ${supportedPlatformText} 视频链接`);
       return;
     }
-    // 视频号：先直接命中 finder-preview API 拿元信息 + 可能的 videoUrl（登录态下有机会返回），
-    // 同时兜底打开内嵌浏览器让用户扫码登录后能在小窗里播放，主进程 hoxy 会自动挖到真视频链接。
+    // 视频号：先拿元信息并创建占位项，再把链接复制到桌面微信。
+    // 用户在真实微信中打开并播放后，主进程 hoxy 会捕获媒体地址和解密键并自动合并占位项。
     if (/(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i.test(url)) {
       setIsParsing(true);
       ipcRenderer.invoke('invoke_解析视频号短链', url).then((data) => {
@@ -74,8 +91,8 @@ function App() {
           message.success('视频号解析成功，已加入下载列表');
           return;
         }
-        // 匿名 API 只有元数据没 videoUrl：先在列表里插一张"信息卡"占位，
-        // 再打开内嵌浏览器让用户扫码。扫码后 hoxy 拦截到真 videoUrl 会自动合并到这张卡上。
+        // 匿名 API 只有元数据没 videoUrl：先在列表里插一张信息卡占位。
+        // 用户在桌面微信中播放后，hoxy 拦截到真 videoUrl 会自动合并到这张卡上。
         if (data.description || data.uploader || data.coverUrl) {
           send({
             type: 'e_视频捕获',
@@ -93,10 +110,10 @@ function App() {
             infoOnly: true,
           });
         }
-        return ipcRenderer.invoke('invoke_打开视频号浏览器', url);
+        return openInWechat(url, data);
       }).catch((err) => {
-        message.warning((err?.message || '视频号短链解析失败') + '，正在打开内嵌浏览器...');
-        ipcRenderer.invoke('invoke_打开视频号浏览器', url).catch(() => {});
+        message.warning((err?.message || '视频号短链解析失败') + '，请在微信中打开并播放');
+        openInWechat(url);
       }).finally(() => {
         setIsParsing(false);
       });
@@ -122,19 +139,21 @@ function App() {
     }).finally(() => {
       setIsParsing(false);
     });
-  }, [inputUrl, send]);
+  }, [inputUrl, openInWechat, send]);
 
   const openInBrowser = useCallback(() => {
-    const url = inputUrl.trim() || 'https://channels.weixin.qq.com/';
-    // 视频号必须走内嵌浏览器（伪装微信 UA + 强制本地代理）；其他平台直接扔给系统浏览器即可。
-    // 兼容 weixin.qq.com/sph/... 等短链形态；空输入也走内嵌浏览器打开首页。
-    if (/(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i.test(url) || !inputUrl.trim()) {
-      ipcRenderer.invoke('invoke_打开视频号浏览器', url)
-        .catch((err) => message.error(err?.message || '打开视频号浏览器失败'));
+    const url = inputUrl.trim();
+    if (!url) {
+      message.warning('请先粘贴视频分享链接');
+      return;
+    }
+    // 视频号交给真实桌面微信打开；其他平台继续使用系统浏览器。
+    if (/(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i.test(url)) {
+      openInWechat(url);
       return;
     }
     shell.openExternal(url);
-  }, [inputUrl]);
+  }, [inputUrl, openInWechat]);
 
   const clearInputUrl = useCallback(() => {
     setInputUrl('');
@@ -192,7 +211,7 @@ function App() {
             <div className="App-inited-toolbar">
               <div className="App-inited-addressbar">
                 <Input
-                  placeholder={`粘贴视频分享链接后点【解析下载】，或点【浏览器打开】播放视频号自动捕获`}
+                  placeholder="粘贴视频分享链接后点【解析下载】"
                   prefix={<LinkOutlined style={{ color: '#94a3b8' }} />}
                   suffix={
                     inputUrl ? (
@@ -217,7 +236,7 @@ function App() {
                 icon={<ExportOutlined />}
                 className="App-inited-go-btn"
               >
-                浏览器打开
+                打开链接
               </Button>
               <Button
                 onClick={openDownloadDir}
@@ -251,8 +270,8 @@ function App() {
                   </Paragraph>
                   <Paragraph style={{ margin: '8px 0 0 0' }}>
                     <b>微信视频号：</b>
-                    点【浏览器打开】用内置微信视频号播放器打开并播放视频；
-                    内置播放器已伪装微信身份并强制走本地代理，播放到的视频会自动捕获到下方列表。
+                    粘贴分享链接后点【解析下载】，程序会复制链接并唤起桌面微信；
+                    在微信中粘贴发送、打开并播放该视频，视频源会自动补齐到下方列表。
                   </Paragraph>
                 </div>
               }
@@ -316,8 +335,8 @@ function App() {
                                 </Tooltip>
                               )}
                               {record.infoOnly && (
-                                <Tooltip title="视频号短链未登录，只拿到元信息；扫码登录后自动补齐视频源">
-                                  <Tag color="warning" icon={<ExclamationCircleOutlined />} className="hd-tag">待登录</Tag>
+                                <Tooltip title="请在桌面微信中打开并播放该视频，播放后自动补齐视频源">
+                                  <Tag color="warning" icon={<ExclamationCircleOutlined />} className="hd-tag">待播放</Tag>
                                 </Tooltip>
                               )}
                             </div>
@@ -355,19 +374,16 @@ function App() {
                           const isQueued = downloadQueue.some(item => item.url === downloadUrl);
                           if (infoOnly) {
                             return (
-                              <Tooltip title="打开内嵌浏览器扫码登录后自动捕获">
+                              <Tooltip title="复制链接并唤起桌面微信，打开播放后自动捕获">
                                 <Button
                                   icon={<ExportOutlined />}
                                   type="primary"
                                   ghost
-                                  onClick={() => {
-                                    ipcRenderer.invoke('invoke_打开视频号浏览器', shareUrl || 'https://channels.weixin.qq.com/')
-                                      .catch((err) => message.error(err?.message || '打开视频号浏览器失败'));
-                                  }}
+                                  onClick={() => openInWechat(shareUrl || 'https://channels.weixin.qq.com/', record)}
                                   size="small"
                                   className="download-btn"
                                 >
-                                  扫码登录
+                                  微信打开
                                 </Button>
                               </Tooltip>
                             );

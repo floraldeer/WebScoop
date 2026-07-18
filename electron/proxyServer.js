@@ -5,6 +5,7 @@ import log from 'electron-log';
 import { app } from 'electron';
 import CONFIG from './const';
 import { setProxy, closeProxy } from './setProxy';
+import { createWechatCaptureCoordinator } from './wechatCaptureCoordinator';
 
 if (process.platform === 'win32') {
   process.env.OPENSSL_BIN = CONFIG.OPEN_SSL_BIN_PATH;
@@ -43,8 +44,7 @@ const injection_html = `
 <script type="text/javascript" src="//res.wx.qq.com/t/wx_fed/finder/web/web-finder/res/js/wvds.inject.js"></script>
 `;
 
-// 注入到页面里的脚本：hook fetch/XHR/WeixinJSBridge，把 JSON 里的视频信息发到 aaaa.com
-// 只有真正被播放器加载/播放过的视频才推给主窗口——避免打开个人主页就把整个 feed 列表全部推入。
+// 注入脚本只提取候选媒体；候选与实际播放请求由主进程全局配对，避免多 WebView 状态割裂。
 const WVDS_INJECT_SCRIPT = `
 (function() {
   'use strict';
@@ -53,12 +53,7 @@ const WVDS_INJECT_SCRIPT = `
 
   var RECEIVER_URL = 'https://aaaa.com';
   var LOG_URL = 'https://wvds-log.aaaa.com';
-  var capturedSet = {};
-
-  // 待推候选池：finderH5ExtTransfer 一次能吐一整页的 media 对象，我们全部先记下 encfilekey/decode_key，
-  // 但**不推**给主进程；等 <video> 元素真的开始加载/播放某个 URL 时，再从池里按 encfilekey 匹配"这条正在放的"推出去。
-  // 这样个人主页刷新时只有当前 hover 播放的那条才进列表，不会一次性 20 条全冒。
-  var pendingByKey = {};
+  var reportedCandidates = {};
 
   function wlog(tag, payload) {
     try {
@@ -78,32 +73,7 @@ const WVDS_INJECT_SCRIPT = `
     return m ? m[1] : '';
   }
 
-  function actuallySend(data) {
-    if (!data || !data.url) return;
-    var desc = (data.description || '未命名视频').trim();
-    var keyBase = desc + '|' + (data.decode_key || '');
-    if (capturedSet[keyBase]) return;
-    capturedSet[keyBase] = true;
-    var out = {
-      url: data.url,
-      hd_url: data.hd_url,
-      size: data.size,
-      description: desc,
-      decode_key: data.decode_key,
-      uploader: data.uploader,
-    };
-    wlog('capture', { desc: desc, size: out.size, hasKey: !!out.decode_key, url: (out.url || '').slice(0, 160) });
-    try {
-      fetch(RECEIVER_URL, {
-        method: 'POST', mode: 'no-cors', cache: 'no-cache',
-        body: JSON.stringify(out),
-      });
-    } catch(e) {}
-  }
-
-  // 只入池、不外发；等到 <video> 播这条时 flushByEncKey 再发
-  // stashCandidate 记录的是"这条视频所有可能的 encfilekey"，因为 <video>.currentSrc 可能命中 SD/HD/spec 任一档。
-  function stashCandidate(data) {
+  function reportCandidate(data) {
     if (!data || !data.url) return;
     var keys = [];
     var k1 = extractEncKey(data.url);
@@ -117,24 +87,26 @@ const WVDS_INJECT_SCRIPT = `
       }
     }
     if (!keys.length) return;
-    for (var j = 0; j < keys.length; j++) pendingByKey[keys[j]] = data;
-    wlog('stash', { keys: keys.length, key0: keys[0].slice(0, 40), desc: (data.description || '').slice(0, 40), hasKey: !!data.decode_key });
+    var reportKey = (data.objectId || data.decode_key || keys[0]) + '|' + (data.current ? 'current' : 'list') + '|' + data.url;
+    if (reportedCandidates[reportKey]) return;
+    reportedCandidates[reportKey] = true;
+    data.keys = keys;
+    delete data._extraKeys;
+    wlog('candidate', {
+      keys: keys.length,
+      key0: keys[0].slice(0, 40),
+      desc: (data.description || '').slice(0, 40),
+      current: !!data.current,
+    });
+    try {
+      fetch(RECEIVER_URL, {
+        method: 'POST', mode: 'no-cors', cache: 'no-cache',
+        body: JSON.stringify({ event: 'candidate', candidate: data }),
+      });
+    } catch(e) {}
   }
 
-  function flushByEncKey(key) {
-    if (!key) return;
-    var data = pendingByKey[key];
-    if (!data) { wlog('flush-miss', { key: key.slice(0, 40) }); return; }
-    delete pendingByKey[key];
-    actuallySend(data);
-  }
-
-  // 主入口：extractVideoFromObject 会调这个 —— 只入池，播放器触发时才推
-  function sendVideoData(data) {
-    stashCandidate(data);
-  }
-
-  function extractVideoFromObject(obj, depth) {
+  function extractVideoFromObject(obj, depth, current) {
     if (!obj || depth > 10) return;
     if (typeof obj !== 'object') return;
 
@@ -163,7 +135,7 @@ const WVDS_INJECT_SCRIPT = `
         var hdToken = '';
         var extraKeys = [];
         // spec_video[] 里通常有多档，选 file_size 最大的当 hd，同时把每一档的 encfilekey 收集起来，
-        // 因为播放器最终真正读的可能是任意一档（HD/SD/自适应），任何一档命中都要能 flush 到同一条卡片。
+        // 因为播放器最终真正读的可能是任意一档（HD/SD/自适应），任何一档命中都要能关联到同一条卡片。
         var spec = media.spec_video || media.specVideo || media.spec_videos || [];
         if (spec && spec.length) {
           var best = spec[0];
@@ -186,11 +158,13 @@ const WVDS_INJECT_SCRIPT = `
           size: media.file_size || media.fileSize || 0,
           description: (descText || '未命名视频').toString().trim().slice(0, 120) || '未命名视频',
           uploader: nickname,
+          objectId: obj.id || obj.object_id || '',
+          current: !!current,
           _extraKeys: extraKeys,
         };
         // 有 decode_key 才推给主进程；没 key 的裸 CDN URL 下载出来是加密字节
         if (payload.url && payload.decode_key) {
-          sendVideoData(payload);
+          reportCandidate(payload);
         } else {
           wlog('media-hit-nokey', { desc: payload.description.slice(0, 40), hasUrl: !!payload.url, hasKey: !!payload.decode_key });
         }
@@ -198,25 +172,30 @@ const WVDS_INJECT_SCRIPT = `
       // 新版 finder-preview 扁平结构（少见但保留）
       var flatUrl = obj.videoUrl || obj.VideoUrl || obj.h264Url || obj.h265Url;
       if (typeof flatUrl === 'string' && flatUrl.indexOf('http') === 0 && (obj.decode_key || obj.decodeKey)) {
-        sendVideoData({
+        reportCandidate({
           decode_key: obj.decodeKey || obj.decode_key || '',
           url: flatUrl + (obj.urlToken || obj.url_token || ''),
           hd_url: null,
           size: obj.fileSize || obj.file_size || 0,
           description: (obj.description || obj.desc || '未命名视频').toString().trim(),
           uploader: obj.nickname || obj.nickName || obj.username || '',
+          objectId: obj.id || obj.object_id || '',
+          current: !!current,
         });
       }
     } catch(e) {}
 
     // 数组/对象继续深挖
     if (Object.prototype.toString.call(obj) === '[object Array]') {
-      for (var i = 0; i < obj.length; i++) extractVideoFromObject(obj[i], depth + 1);
+      for (var i = 0; i < obj.length; i++) extractVideoFromObject(obj[i], depth + 1, false);
       return;
     }
     for (var k in obj) {
       if (obj[k] && typeof obj[k] === 'object') {
-        extractVideoFromObject(obj[k], depth + 1);
+        var childIsCurrent = !!current ||
+          (depth === 0 && (k === 'object' || k === 'feedObject') &&
+            Object.prototype.toString.call(obj[k]) !== '[object Array]');
+        extractVideoFromObject(obj[k], depth + 1, childIsCurrent);
       }
     }
   }
@@ -224,19 +203,19 @@ const WVDS_INJECT_SCRIPT = `
   function tryParseAndExtract(text) {
     if (!text) return;
     if (typeof text !== 'string') {
-      try { extractVideoFromObject(text, 0); } catch(e) {}
+      try { extractVideoFromObject(text, 0, false); } catch(e) {}
       return;
     }
     try {
       var json = JSON.parse(text);
-      extractVideoFromObject(json, 0);
+      extractVideoFromObject(json, 0, false);
     } catch(e) {
       var startIdx = text.indexOf('{');
       var endIdx = text.lastIndexOf('}');
       if (startIdx >= 0 && endIdx > startIdx) {
         try {
           var json2 = JSON.parse(text.substring(startIdx, endIdx + 1));
-          extractVideoFromObject(json2, 0);
+          extractVideoFromObject(json2, 0, false);
         } catch(e2) {}
       }
     }
@@ -328,54 +307,6 @@ const WVDS_INJECT_SCRIPT = `
     hookFetch();
     hookXHR();
     hookWeixinJSBridge();
-    hookVideoElements();
-  }
-
-  // 观察 <video> 元素的 src / loadstart / play：任何一个 src 里带 encfilekey，
-  // 就把候选池中对应那条推给主进程。这样只有正在真正播放/加载的视频才会进下载列表。
-  function hookVideoElements() {
-    if (window.__wvds_video_hooked) return;
-    window.__wvds_video_hooked = true;
-
-    function bindOne(v) {
-      if (!v || v.__wvds_bound) return;
-      v.__wvds_bound = true;
-      // 视频号 SPA 换视频时通常复用同一个 <video>，只改 currentSrc；有的路径不重派 loadstart。
-      // 因此除了播放事件外，还监听 emptied/ratechange/durationchange/timeupdate，以及用
-      // MutationObserver 观察 src 属性变化：任何一个能"感知到当前正在放的是哪一条 encfilekey"
-      // 的信号都触发一次 flushByEncKey，配合去重保证同一条不会重复推。
-      function tryFlush() {
-        try {
-          var src = v.currentSrc || v.src || '';
-          var k = extractEncKey(src);
-          if (k) flushByEncKey(k);
-        } catch(e) {}
-      }
-      var events = ['loadstart', 'loadedmetadata', 'play', 'playing', 'canplay', 'emptied', 'durationchange', 'ratechange', 'timeupdate'];
-      events.forEach(function(ev) {
-        v.addEventListener(ev, tryFlush, true);
-      });
-      try {
-        var vmo = new MutationObserver(tryFlush);
-        vmo.observe(v, { attributes: true, attributeFilter: ['src'] });
-      } catch(e) {}
-      tryFlush();
-    }
-
-    function scan() {
-      try {
-        var list = document.querySelectorAll('video');
-        for (var i = 0; i < list.length; i++) bindOne(list[i]);
-      } catch(e) {}
-    }
-    scan();
-    setInterval(scan, 1500);
-
-    try {
-      var mo = new MutationObserver(function() { scan(); });
-      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
-    } catch(e) {}
-    wlog('video-hooked');
   }
 
   tryInitHooks();
@@ -396,7 +327,14 @@ const WVDS_INJECT_SCRIPT = `
 `;
 
 let currentProxyPort = 0;
+let currentWechatCaptureCoordinator = null;
+let pendingWechatCaptureTarget = null;
+
 export function getCurrentProxyPort() { return currentProxyPort; }
+export function setWechatCaptureTarget(target) {
+  pendingWechatCaptureTarget = target || null;
+  if (currentWechatCaptureCoordinator) currentWechatCaptureCoordinator.setTarget(pendingWechatCaptureTarget);
+}
 
 export async function startServer({ win, setProxyErrorCallback = f => f }) {
   const port = await getPort();
@@ -441,24 +379,42 @@ export async function startServer({ win, setProxyErrorCallback = f => f }) {
       win?.webContents?.send?.('VIDEO_CAPTURE', data);
     }
 
-    // === 注入脚本回传的视频数据接收器 ===
+    currentWechatCaptureCoordinator = createWechatCaptureCoordinator({
+      onCapture: data => sendCapture({
+        ...data,
+        size: data.size || 0,
+        description: data.description || '微信视频号视频',
+        hd_url: data.hd_url || null,
+        uploader: data.uploader || '',
+        platform: '微信视频号',
+        referer: 'https://channels.weixin.qq.com/',
+        noDecrypt: false,
+      }),
+    });
+    if (pendingWechatCaptureTarget) currentWechatCaptureCoordinator.setTarget(pendingWechatCaptureTarget);
+
+    // === 注入脚本回传的微信媒体候选 ===
     proxy.intercept(
       { phase: 'request', hostname: 'aaaa.com', as: 'json' },
       (req, res) => {
         try {
           if (req.json) {
             const d = req.json;
-            sendCapture({
-              url: d.url,
-              size: d.size || 0,
-              description: d.description || '微信视频号视频',
-              decode_key: d.decode_key || '',
-              hd_url: d.hd_url || null,
-              uploader: d.uploader || '',
-              platform: '微信视频号',
-              referer: 'https://channels.weixin.qq.com/',
-              noDecrypt: !d.decode_key,
-            });
+            if (d.event === 'candidate') {
+              currentWechatCaptureCoordinator.addCandidate(d.candidate);
+            } else {
+              sendCapture({
+                url: d.url,
+                size: d.size || 0,
+                description: d.description || '微信视频号视频',
+                decode_key: d.decode_key || '',
+                hd_url: d.hd_url || null,
+                uploader: d.uploader || '',
+                platform: '微信视频号',
+                referer: 'https://channels.weixin.qq.com/',
+                noDecrypt: !d.decode_key,
+              });
+            }
           }
         } catch (err) {
           info('aaaa-intercept-err', String(err && err.message || err));
@@ -532,8 +488,12 @@ export async function startServer({ win, setProxyErrorCallback = f => f }) {
         const headers = req.headers || {};
         const ref = headers['referer'] || headers['origin'] || '';
         if (ref) reqReferers[fullUrl] = ref;
-        // 视频号相关请求都强制关掉 br，让 hoxy 能解压 HTML/JSON
         const hostname = (req.hostname || '').toLowerCase();
+        if (/(^|\.)finder\.video\.qq\.com$/i.test(hostname)) {
+          const mediaKey = new URL(fullUrl).searchParams.get('encfilekey');
+          if (mediaKey) currentWechatCaptureCoordinator.markActive(mediaKey);
+        }
+        // 视频号相关请求都强制关掉 br，让 hoxy 能解压 HTML/JSON
         if (hostname.indexOf('channels.weixin.qq.com') !== -1 || hostname.indexOf('res.wx.qq.com') !== -1) {
           const ae = (headers['accept-encoding'] || '').toString();
           if (ae.indexOf('br') !== -1) {
@@ -696,8 +656,8 @@ export async function startServer({ win, setProxyErrorCallback = f => f }) {
             if (hits.length) {
               info('feed-api-video-hit', 'count=' + hits.length + ' first=' + hits[0].url.slice(0, 120));
               // 注意：这里不再全量 sendCapture。一次 finderH5ExtTransfer 响应能返回整页 20+ 条 media，
-              // 全部推给 UI 会导致个人主页一打开就冒 20 条卡片。真正的入口是注入脚本 (WVDS_INJECT_SCRIPT)：
-              // 只有 <video> 元素真的在加载/播放某条 encfilekey 时才 flush 到 UI。
+              // 全部推给 UI 会导致个人主页一打开就冒 20 条卡片。注入脚本只上报候选，
+              // 由主进程在 finder CDN 请求真正出现时完成全局配对。
               // 若日后需要"侵入式全量入列表"，通过 DEBUG_WX 或额外开关再开。
             } else {
               info('feed-api-video-miss', 'no {media,decode_key} in response');

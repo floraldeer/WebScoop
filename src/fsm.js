@@ -248,7 +248,7 @@ export default createMachine(
     actions: {
       action_视频捕获: actions.assign(
         ({ captureList }, { url, size, description, decodeKey, hdUrl, uploader, platform, referer, noDecrypt, coverUrl, shareUrl, infoOnly }) => {
-          // infoOnly=true 表示只有元信息（视频号短链未登录场景），无 url 也允许入列表，
+          // infoOnly=true 表示目前只有视频号元信息、尚未在桌面微信中播放，无 url 也允许入列表，
           // 但要靠 shareUrl 作为唯一键，避免同一条视频号短链多次点解析时重复添加。
           const primaryKey = url || shareUrl;
           if (!primaryKey) return {};
@@ -259,7 +259,7 @@ export default createMachine(
             size: size || 0,
             url: url || '',
             hdUrl: hdUrl || null,
-            prettySize: size ? prettyBytes(+size) : (infoOnly ? '待登录' : '未知'),
+            prettySize: size ? prettyBytes(+size) : (infoOnly ? '待播放' : '未知'),
             description: description || '未命名视频',
             decodeKey: decodeKey || '',
             uploader: uploader || '',
@@ -309,6 +309,7 @@ export default createMachine(
             const shouldUpdate =
               gainedRealUrl ||
               (hdUrl && !existing.hdUrl) ||
+              (newItem.decodeKey && !existing.decodeKey) ||
               shouldUpdateTitle ||
               (newItem.uploader && !existing.uploader) ||
               ((newItem.size || 0) > (existing.size || 0));
@@ -318,12 +319,14 @@ export default createMachine(
               ...existing,
               hdUrl: hdUrl || existing.hdUrl,
               size: newItem.size || existing.size,
-              prettySize: newItem.size ? prettyBytes(+newItem.size) : existing.prettySize,
+              prettySize: newItem.size ? prettyBytes(+newItem.size) : (gainedRealUrl ? '未知' : existing.prettySize),
               url: newItem.url || existing.url,
+              decodeKey: newItem.decodeKey || existing.decodeKey,
               description: shouldUpdateTitle ? newItem.description : existing.description,
               uploader: newItem.uploader || existing.uploader,
+              platform: newItem.platform || existing.platform,
               referer: newItem.referer || existing.referer,
-              noDecrypt: existing.noDecrypt && newItem.noDecrypt,
+              noDecrypt: newItem.url ? newItem.noDecrypt : existing.noDecrypt,
               coverUrl: newItem.coverUrl || existing.coverUrl,
               shareUrl: newItem.shareUrl || existing.shareUrl,
               infoOnly: existing.infoOnly && !newItem.url,
@@ -333,7 +336,7 @@ export default createMachine(
           }
           const platformTag = newItem.platform ? `[${newItem.platform}] ` : '';
           if (newItem.infoOnly) {
-            message.info(`已识别视频号元信息: ${platformTag}${newItem.description}（扫码登录后自动补齐视频源）`);
+            message.info(`已识别视频号元信息: ${platformTag}${newItem.description}（在桌面微信中打开播放后自动补齐视频源）`);
           } else {
             message.success(`捕获到视频: ${platformTag}${newItem.description}`);
           }

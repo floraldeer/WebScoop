@@ -210,8 +210,32 @@ function isLikelyVideoUrl(url) {
   );
 }
 
-async function validateVideoUrl(url, referer) {
-  if (!isLikelyVideoUrl(url)) return false;
+export function getMediaSizeFromHeaders(headers = {}, status = 0) {
+  const contentRange = String(headers["content-range"] || "");
+  const rangeTotal = Number.parseInt(contentRange.match(/\/(\d+)\s*$/)?.[1] || "0", 10);
+  if (Number.isSafeInteger(rangeTotal) && rangeTotal > 0) return rangeTotal;
+
+  const explicitTotal = Number.parseInt(
+    headers["x-file-size"] ||
+      headers["x-content-length"] ||
+      headers["x-oss-object-size"] ||
+      "0",
+    10
+  );
+  if (Number.isSafeInteger(explicitTotal) && explicitTotal > 0) {
+    return explicitTotal;
+  }
+
+  const contentLength = Number.parseInt(headers["content-length"] || "0", 10);
+  return status !== 206 &&
+    Number.isSafeInteger(contentLength) &&
+    contentLength > 0
+    ? contentLength
+    : 0;
+}
+
+async function inspectVideoUrl(url, referer) {
+  if (!isLikelyVideoUrl(url)) return { valid: false, size: 0 };
   const headers = {
     ...DEFAULT_HEADERS,
     Referer: referer,
@@ -228,13 +252,19 @@ async function validateVideoUrl(url, referer) {
     response.data?.destroy?.();
     const contentType = response.headers?.["content-type"] || "";
     const resolvedUrl = response.request?.res?.responseUrl || url;
-    return (
-      contentType.includes("video/") ||
-      /\.(mp4|mov|m4v|webm)(\?|$)/i.test(resolvedUrl)
-    );
+    return {
+      valid:
+        contentType.includes("video/") ||
+        /\.(mp4|mov|m4v|webm)(\?|$)/i.test(resolvedUrl),
+      size: getMediaSizeFromHeaders(response.headers, response.status),
+    };
   } catch (e) {
-    return false;
+    return { valid: false, size: 0 };
   }
+}
+
+async function validateVideoUrl(url, referer) {
+  return (await inspectVideoUrl(url, referer)).valid;
 }
 
 async function selectPlayableCandidate(candidates, referer) {
@@ -732,9 +762,10 @@ export async function parsePlatformVideo(inputUrl) {
   if (platform === "小红书") {
     const { videoUrl, title } = parseXiaohongshu(page.html, page.resolvedUrl);
     if (videoUrl) {
+      const mediaInfo = await inspectVideoUrl(videoUrl, page.resolvedUrl);
       return {
         url: videoUrl,
-        size: 0,
+        size: mediaInfo.size,
         description: title,
         decode_key: "",
         hd_url: null,
@@ -749,9 +780,10 @@ export async function parsePlatformVideo(inputUrl) {
   if (platform === "快手") {
     const { videoUrl, title } = parseKuaishou(page.html, page.resolvedUrl);
     if (videoUrl) {
+      const mediaInfo = await inspectVideoUrl(videoUrl, page.resolvedUrl);
       return {
         url: videoUrl,
-        size: 0,
+        size: mediaInfo.size,
         description: title,
         decode_key: "",
         hd_url: null,
