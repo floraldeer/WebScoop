@@ -1,0 +1,9 @@
+build/
+build-electron/
+build-web/
+packs/
+node_modules/
+coverage/
+public/
+electron/decrypt.js
+package-lock.json

@@ -6,19 +6,22 @@
 @text-secondary: #64748b;
 @bg-color: #f8fafc;
 @card-bg: #ffffff;
-@shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-@shadow-md: 0 4px 12px rgba(0,0,0,0.06);
-@shadow-lg: 0 10px 30px rgba(0,0,0,0.1);
+@shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+@shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+@shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.1);
 @radius-sm: 6px;
 @radius-md: 10px;
 @radius-lg: 14px;
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -254,7 +257,8 @@ body {
       height: 36px;
       padding: 0 20px;
       box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
-      &:hover, &:focus {
+      &:hover,
+      &:focus {
         background: @primary-light !important;
         border-color: @primary-light !important;
       }
@@ -269,7 +273,8 @@ body {
       color: @primary-color;
       border-color: rgba(79, 70, 229, 0.24);
       background: @card-bg;
-      &:hover, &:focus {
+      &:hover,
+      &:focus {
         color: @primary-light !important;
         border-color: @primary-light !important;
         background: @primary-bg !important;
@@ -318,7 +323,7 @@ body {
         right: 16px;
         width: 36px;
         height: 36px;
-        background: rgba(255,255,255,0.92);
+        background: rgba(255, 255, 255, 0.92);
         backdrop-filter: blur(8px);
         border-radius: 50%;
         display: flex;
@@ -508,7 +513,8 @@ body {
   border-color: @primary-color;
   font-weight: 500;
   box-shadow: 0 2px 6px rgba(79, 70, 229, 0.2);
-  &:hover, &:focus {
+  &:hover,
+  &:focus {
     background: @primary-light !important;
     border-color: @primary-light !important;
   }
@@ -542,7 +548,8 @@ body {
   font-weight: 600;
   font-size: 15px;
   box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
-  &:hover, &:focus {
+  &:hover,
+  &:focus {
     background: @primary-light !important;
     border-color: @primary-light !important;
   }
@@ -569,8 +576,13 @@ body {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 
 ::-webkit-scrollbar {

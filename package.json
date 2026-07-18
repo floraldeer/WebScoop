@@ -5,7 +5,6 @@
   "main": "./build-electron/index.js",
   "homepage": "./",
   "scripts": {
-    "postinstall": "husky install",
     "start": "concurrently \"cross-env BROWSER=none npm run start-web\"  \"wait-on http://localhost:3000 && npm run start-electron\" ",
     "start-debug": "concurrently \"cross-env BROWSER=none npm run start-web\"  \"wait-on http://localhost:3000 && npm run debug-electron\" ",
     "start-web": "react-app-rewired start",
@@ -19,7 +18,13 @@
     "pack:mac": "rm -rf packs && npm run build-all && electron-builder --mac",
     "pack:all": "npm run build-all && electron-builder --win --mac",
     "gen-icon": "electron-icon-builder --input=./public/icon/icon.png --output=./public/icon",
-    "pretty": "prettier --write \"src/**/*.{js,jsx,less}\" \"electron/**/*.js\""
+    "pretty": "prettier --write \"src/**/*.{js,jsx,less}\" \"electron/**/*.js\"",
+    "test": "cross-env CI=true react-app-rewired test --watchAll=false",
+    "test:watch": "react-app-rewired test",
+    "lint": "eslint \"src/**/*.{js,jsx}\" \"electron/**/*.js\"",
+    "lint:fix": "eslint --fix \"src/**/*.{js,jsx}\" \"electron/**/*.js\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,less}\" \"electron/**/*.js\"",
+    "prepare": "husky install"
   },
   "targets": {
     "electron": {
@@ -28,10 +33,9 @@
       "distDir": "build-electron"
     }
   },
-  "husky": {
-    "hooks": {
-      "pre-commit": "prettier -c --write \"(src/**/*|electron/**/*)\" && git add -A ."
-    }
+  "lint-staged": {
+    "src/**/*.{js,jsx,less}": "prettier --write",
+    "electron/**/*.js": "prettier --write"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",
@@ -40,9 +44,11 @@
     "electron": "^26.1.0",
     "electron-builder": "^23.0.3",
     "electron-icon-builder": "^2.0.1",
+    "eslint": "^8.57.1",
     "husky": "^8.0.1",
     "less": "^4.1.2",
     "less-loader": "^11.0.0",
+    "lint-staged": "^15.5.2",
     "prettier": "^2.6.2",
     "react-app-rewired": "^2.2.1",
     "react-scripts": "5.0.1",
@@ -56,9 +62,9 @@
     "@xstate/react": "^3.0.0",
     "antd": "^4.20.5",
     "axios": "^0.27.2",
-    "cross-spawn": "^7.0.3",
     "electron-is-dev": "^2.0.0",
     "electron-log": "^4.4.7",
+    "electron-updater": "^6.8.9",
     "get-port": "^6.1.2",
     "hoxy": "^3.3.1",
     "lodash": "^4.17.21",
@@ -76,10 +82,11 @@
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xiaofu666/WebScoop.git"
+    "url": "git+https://github.com/floraldeer/WebScoop.git"
   },
   "build": {
     "extends": null,
+    "afterPack": "scripts/afterPack.js",
     "productName": "WebScoop",
     "appId": "com.lurich.WebScoop",
     "copyright": "Copyright © 2026 shlee",
@@ -98,12 +105,10 @@
     ],
     "mac": {
       "icon": "public/icon/icons/mac/icon.icns",
-      "identity": null,
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "entitlements": "public/plist/DevelopmentExportOptionsPlist.plist",
-      "signIgnore": false,
-      "entitlementsInherit": "build/DevelopmentExportOptionsPlist.plist",
+      "entitlements": "public/plist/entitlements.mac.plist",
+      "entitlementsInherit": "public/plist/entitlements.mac.plist",
       "target": {
         "target": "dmg",
         "arch": [
@@ -111,7 +116,11 @@
         ]
       }
     },
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "floraldeer",
+      "repo": "WebScoop"
+    },
     "win": {
       "target": [
         {

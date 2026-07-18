@@ -13,7 +13,7 @@
 - 兼容对象存储常见的 `x-file-size`、`x-content-length` 和 `x-oss-object-size`。
 - `206` 响应没有总长度时不把分块的 `Content-Length` 误认为完整文件大小。
 
-小红书和快手拿到专用解析 URL 后各执行一次现有 Range 探测，把获得的大小写入解析结果。探测失败仍返回原 URL 和 `size: 0`，不阻断下载。
+小红书拿到专用解析 URL 后执行一次现有 Range 探测，把获得的大小写入解析结果。快手页面会在 `window.INIT_STATE` 的 `photo.manifest.adaptationSet[].representation[]` 中返回精确 `fileSize`，因此快手优先用 `JSON.parse` 读取结构化页面状态，并按 `mainMvUrls[0]` 的 URL 路径匹配对应 representation；页面字段缺失时再使用 Range 探测。两种探测都失败仍返回原 URL 和 `size: 0`，不阻断下载。
 
 ## 隔离边界
 

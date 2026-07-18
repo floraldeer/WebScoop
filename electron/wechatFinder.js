@@ -75,7 +75,14 @@ async function callFeedInfoApi(inputUrl, cookieHeader = '') {
   };
   if (cookieHeader) headers.Cookie = cookieHeader;
 
-  log.info('[wxapi] fetch shortUri=' + shortUri + ' exportId=' + (exportId || '-') + ' logged=' + !!cookieHeader);
+  log.info(
+    '[wxapi] fetch shortUri=' +
+      shortUri +
+      ' exportId=' +
+      (exportId || '-') +
+      ' logged=' +
+      !!cookieHeader,
+  );
 
   const resp = await axios.post(apiUrl, payload, {
     httpsAgent,
@@ -92,7 +99,8 @@ function walkFindVideoUrl(node, out, depth = 0) {
     const v = node[k];
     if (typeof v === 'string' && /^https?:\/\//i.test(v)) {
       const isPic = /picformat=|wxampicformat=/i.test(v);
-      const isMedia = /\.mp4(\?|$)/i.test(v) || (/finder\.video\.qq\.com\/.*stodownload/i.test(v) && !isPic);
+      const isMedia =
+        /\.mp4(\?|$)/i.test(v) || (/finder\.video\.qq\.com\/.*stodownload/i.test(v) && !isPic);
       if (isMedia && !/(coverUrl|thumbUrl|headImgUrl|avatarUrl)/i.test(k)) out.push(v);
     }
     if (v && typeof v === 'object') walkFindVideoUrl(v, out, depth + 1);
@@ -102,7 +110,10 @@ function walkFindVideoUrl(node, out, depth = 0) {
 // 主进程 IPC 入口：解析视频号短链拿元信息 + 可能的视频 URL，供 UI 直接展示。
 export async function parseWechatShortLink(inputUrl) {
   const { body, referer, shortUri, exportId } = await callFeedInfoApi(inputUrl);
-  log.info('[wxapi] resp errCode=' + body.errCode, 'keys=' + JSON.stringify(Object.keys(body.data || {})));
+  log.info(
+    '[wxapi] resp errCode=' + body.errCode,
+    'keys=' + JSON.stringify(Object.keys(body.data || {})),
+  );
   if (body.errCode && body.errCode !== 0) {
     throw new Error(`视频号接口返回错误：${body.errMsg || body.errCode}`);
   }
@@ -130,7 +141,7 @@ export async function parseWechatShortLink(inputUrl) {
   };
 }
 
-// wechatBrowser 用：把用户粘贴的短链 / /sph/ / 已在 /web/pages/feed 的 URL，
+// 把用户粘贴的短链 / /sph/ / 已在 /web/pages/feed 的 URL，
 // 都转成能真正播放的 /web/pages/feed?exportId=xxx。找不到 exportId 时保底回退原始 URL。
 // cookieHeader 可选：传入登录态 cookies 后 API 有机会返回真视频 URL，同步一并返回。
 export async function resolveWechatPlayableUrl(inputUrl, { cookieHeader = '' } = {}) {
@@ -140,18 +151,19 @@ export async function resolveWechatPlayableUrl(inputUrl, { cookieHeader = '' } =
   }
   try {
     const { body } = await callFeedInfoApi(inputUrl, cookieHeader);
-    const data = body && body.data || {};
+    const data = (body && body.data) || {};
     const scene = data.sceneInfo || {};
     const dynamicExportId = scene.dynamicExportId || '';
     if (dynamicExportId) {
       const playableUrl =
-        'https://channels.weixin.qq.com/web/pages/feed?exportId=' + encodeURIComponent(dynamicExportId);
+        'https://channels.weixin.qq.com/web/pages/feed?exportId=' +
+        encodeURIComponent(dynamicExportId);
       const found = [];
       walkFindVideoUrl(data, found);
       return { playableUrl, dynamicExportId, videoUrl: found[0] || '' };
     }
   } catch (err) {
-    log.warn('[wxapi] resolveWechatPlayableUrl failed:', String(err && err.message || err));
+    log.warn('[wxapi] resolveWechatPlayableUrl failed:', String((err && err.message) || err));
   }
   return { playableUrl: inputUrl, dynamicExportId: '' };
 }

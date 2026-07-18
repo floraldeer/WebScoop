@@ -13,6 +13,7 @@ const EXECUTABLE_PATH = path.join(
   'public',
 );
 const HOME_PATH = path.join(os.homedir(), '.webscoop');
+const CERT_PATH = path.join(HOME_PATH, 'cert');
 
 export default {
   APP_START_URL: isDev
@@ -25,10 +26,14 @@ export default {
   IS_DEV: isDev,
   EXECUTABLE_PATH,
   HOME_PATH,
-  CERT_PRIVATE_PATH: path.join(EXECUTABLE_PATH, './keys/private.pem'),
-  CERT_PUBLIC_PATH: path.join(EXECUTABLE_PATH, './keys/public.pem'),
+  CERT_PATH,
+  CERT_PRIVATE_PATH: path.join(CERT_PATH, 'private.pem'),
+  CERT_PUBLIC_PATH: path.join(CERT_PATH, 'public.pem'),
+  CERT_IDENTITY_PATH: path.join(CERT_PATH, 'identity.json'),
+  LEGACY_CERT_COMMON_NAME: 'lecepin-2022-05-19',
   INSTALL_CERT_FLAG: path.join(HOME_PATH, './installed.lock'),
-  WIN_CERT_INSTALL_HELPER: path.join(EXECUTABLE_PATH, './w_c.exe'),
+  PROXY_STATE_PATH: path.join(HOME_PATH, 'proxy-state.json'),
+  PRELOAD_PATH: path.join(APP_PATH, 'build-electron', 'preload.js'),
   APP_CN_NAME: '拾海',
   APP_EN_NAME: 'WebScoop',
   REGEDIT_VBS_PATH: path.join(EXECUTABLE_PATH, './regedit-vbs'),

@@ -3,12 +3,12 @@ const DEFAULT_TARGET_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_COMPLETED_TARGET_TTL_MS = 15 * 1000;
 const DEFAULT_CAPTURE_TTL_MS = 30 * 60 * 1000;
 
-const normalizeText = value =>
+const normalizeText = (value) =>
   String(value || '')
     .trim()
     .replace(/\s+/g, ' ');
 
-const normalizeKey = value => {
+const normalizeKey = (value) => {
   const key = String(value || '').trim();
   if (!key) return '';
   try {
@@ -18,7 +18,8 @@ const normalizeKey = value => {
   }
 };
 
-const isGenericDescription = value => /^(微信视频号视频|视频号视频|网络视频|未命名视频)$/.test(normalizeText(value));
+const isGenericDescription = (value) =>
+  /^(微信视频号视频|视频号视频|网络视频|未命名视频)$/.test(normalizeText(value));
 
 export function createWechatCaptureCoordinator({
   onCapture,
@@ -48,7 +49,7 @@ export function createWechatCaptureCoordinator({
     if (target && now() > target.expiresAt) target = null;
   };
 
-  const matchesTarget = candidate => {
+  const matchesTarget = (candidate) => {
     if (!target) return true;
     if (target.completed || !candidate.current) return false;
 
@@ -60,15 +61,24 @@ export function createWechatCaptureCoordinator({
     if (targetUploader && candidateUploader && targetUploader !== candidateUploader) return false;
 
     const candidateDescription = normalizeText(candidate.description);
-    if (targetDescription && candidateDescription && !isGenericDescription(targetDescription) && !isGenericDescription(candidateDescription) && targetDescription !== candidateDescription) {
+    if (
+      targetDescription &&
+      candidateDescription &&
+      !isGenericDescription(targetDescription) &&
+      !isGenericDescription(candidateDescription) &&
+      targetDescription !== candidateDescription
+    ) {
       return false;
     }
     return true;
   };
 
-  const captureIdOf = candidate => normalizeText(candidate.decode_key) || normalizeText(candidate.objectId) || normalizeKey(candidate.keys && candidate.keys[0]);
+  const captureIdOf = (candidate) =>
+    normalizeText(candidate.decode_key) ||
+    normalizeText(candidate.objectId) ||
+    normalizeKey(candidate.keys && candidate.keys[0]);
 
-  const tryCapture = candidate => {
+  const tryCapture = (candidate) => {
     if (!candidate || !matchesTarget(candidate)) return false;
     const captureId = captureIdOf(candidate);
     if (!captureId || captured.has(captureId)) return false;
@@ -86,7 +96,7 @@ export function createWechatCaptureCoordinator({
     return true;
   };
 
-  const addCandidate = input => {
+  const addCandidate = (input) => {
     cleanup();
     if (!input || !input.url || !input.decode_key) return false;
     const keys = Array.from(new Set((input.keys || []).map(normalizeKey).filter(Boolean)));
@@ -100,7 +110,7 @@ export function createWechatCaptureCoordinator({
     return false;
   };
 
-  const markActive = inputKey => {
+  const markActive = (inputKey) => {
     cleanup();
     const key = normalizeKey(inputKey);
     if (!key) return false;
@@ -108,7 +118,7 @@ export function createWechatCaptureCoordinator({
     return tryCapture(candidates.get(key));
   };
 
-  const setTarget = input => {
+  const setTarget = (input) => {
     cleanup();
     if (!input || !input.shareUrl) {
       target = null;
@@ -128,7 +138,7 @@ export function createWechatCaptureCoordinator({
     const targetDescription = normalizeText(target.description);
     if (targetDescription && !isGenericDescription(targetDescription)) {
       for (const candidate of candidates.values()) {
-        if (candidate.keys.some(key => activeKeys.has(key)) && tryCapture(candidate)) break;
+        if (candidate.keys.some((key) => activeKeys.has(key)) && tryCapture(candidate)) break;
       }
     }
   };

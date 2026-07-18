@@ -11,7 +11,7 @@ module.exports = override(
     postcss.options = { postcssOptions };
   }),
   function (config) {
-    config.target = 'electron-renderer';
+    config.target = 'web';
     return config;
   },
 );

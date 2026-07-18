@@ -15,7 +15,7 @@ describe('wechat capture coordinator', () => {
   test('pairs a candidate followed by a media request', () => {
     const captures = [];
     const coordinator = createWechatCaptureCoordinator({
-      onCapture: data => captures.push(data),
+      onCapture: (data) => captures.push(data),
     });
 
     coordinator.addCandidate(candidate());
@@ -32,7 +32,7 @@ describe('wechat capture coordinator', () => {
   test('pairs a media request followed by a candidate from another page', () => {
     const captures = [];
     const coordinator = createWechatCaptureCoordinator({
-      onCapture: data => captures.push(data),
+      onCapture: (data) => captures.push(data),
     });
 
     coordinator.markActive('media-key-1');
@@ -44,7 +44,7 @@ describe('wechat capture coordinator', () => {
   test('only resolves a target with the matching current detail object', () => {
     const captures = [];
     const coordinator = createWechatCaptureCoordinator({
-      onCapture: data => captures.push(data),
+      onCapture: (data) => captures.push(data),
     });
     coordinator.setTarget({
       shareUrl: 'https://weixin.qq.com/sph/target',
@@ -73,7 +73,7 @@ describe('wechat capture coordinator', () => {
   test('does not emit twice for repeated range requests', () => {
     const captures = [];
     const coordinator = createWechatCaptureCoordinator({
-      onCapture: data => captures.push(data),
+      onCapture: (data) => captures.push(data),
     });
 
     coordinator.addCandidate(candidate());
@@ -88,7 +88,7 @@ describe('wechat capture coordinator', () => {
     let time = 1000;
     const captures = [];
     const coordinator = createWechatCaptureCoordinator({
-      onCapture: data => captures.push(data),
+      onCapture: (data) => captures.push(data),
       now: () => time,
       completedTargetTtlMs: 100,
     });
@@ -100,12 +100,14 @@ describe('wechat capture coordinator', () => {
     coordinator.addCandidate(candidate());
     coordinator.markActive('media-key-1');
 
-    coordinator.addCandidate(candidate({
-      keys: ['neighbor-key'],
-      decode_key: 'neighbor-decode-key',
-      description: '相邻视频',
-      objectId: 'neighbor-object',
-    }));
+    coordinator.addCandidate(
+      candidate({
+        keys: ['neighbor-key'],
+        decode_key: 'neighbor-decode-key',
+        description: '相邻视频',
+        objectId: 'neighbor-object',
+      }),
+    );
     coordinator.markActive('neighbor-key');
     expect(captures).toHaveLength(1);
 
@@ -118,7 +120,7 @@ describe('wechat capture coordinator', () => {
     let time = 1000;
     const captures = [];
     const coordinator = createWechatCaptureCoordinator({
-      onCapture: data => captures.push(data),
+      onCapture: (data) => captures.push(data),
       now: () => time,
     });
     coordinator.addCandidate(candidate());
@@ -136,7 +138,7 @@ describe('wechat capture coordinator', () => {
     let time = 1000;
     const captures = [];
     const coordinator = createWechatCaptureCoordinator({
-      onCapture: data => captures.push(data),
+      onCapture: (data) => captures.push(data),
       now: () => time,
       entryTtlMs: 100,
     });

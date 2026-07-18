@@ -1,53 +1,39 @@
 import { useState, useCallback } from 'react';
 import { useMachine } from '@xstate/react';
-import { Table, Button, Progress, Alert, Input, Space, Typography, Tag, Tooltip, message } from 'antd';
-import { shell, ipcRenderer } from 'electron';
+import { Button, Progress, Alert, Input, Space, Typography, Tag, Tooltip, message } from 'antd';
 import {
-  DownloadOutlined,
-  EyeOutlined,
   ClearOutlined,
-  FormatPainterOutlined,
-  RedoOutlined,
   LinkOutlined,
-  StarOutlined,
-  LoadingOutlined,
   VideoCameraOutlined,
-  ExclamationCircleOutlined,
   ExportOutlined,
   FolderOpenOutlined,
   CloseCircleOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import fsm from './fsm';
+import { supportedPlatformText, WECHAT_URL_REGEX } from './constants';
+import { LoadingScreen, UninitScreen, ServiceFailedScreen } from './components/InitScreen';
+import CaptureTable from './components/CaptureTable';
+import SettingsDrawer from './components/SettingsDrawer';
 
 import './App.less';
-const { Text, Title, Paragraph } = Typography;
-
-const platformColors = {
-  '微信视频号': '#07c160',
-  '抖音': '#000000',
-  '快手': '#ff4906',
-  '小红书': '#fe2c55',
-  'B站': '#00a1d6',
-  'YouTube': '#ff0000',
-  'X': '#111827',
-  'TikTok': '#25f4ee',
-  'Instagram': '#c13584',
-  'Facebook': '#1877f2',
-  'Vimeo': '#1ab7ea',
-  '微博': '#e6162d',
-};
-
-const supportedPlatformText = '视频号、抖音、小红书、快手、B站、YouTube、X、TikTok、Instagram、Facebook、Vimeo、微博';
+const { Text, Paragraph } = Typography;
+const electronAPI = window.webscoop;
 
 function App() {
   const [state, send] = useMachine(fsm);
   const { captureList, currentUrl, downloadProgress, downloadQueue } = state.context;
   const [inputUrl, setInputUrl] = useState('');
   const [isParsing, setIsParsing] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const cancelDownload = useCallback(() => {
+    electronAPI.invoke('invoke_取消下载').catch(() => {});
+  }, []);
 
   const openInWechat = useCallback(async (url, target = {}) => {
     try {
-      await ipcRenderer.invoke('invoke_在微信中打开', {
+      await electronAPI.invoke('invoke_在微信中打开', {
         url,
         description: target.description || '',
         uploader: target.uploader || '',
@@ -70,75 +56,83 @@ function App() {
     }
     // 视频号：先拿元信息并创建占位项，再把链接复制到桌面微信。
     // 用户在真实微信中打开并播放后，主进程 hoxy 会捕获媒体地址和解密键并自动合并占位项。
-    if (/(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i.test(url)) {
+    if (WECHAT_URL_REGEX.test(url)) {
       setIsParsing(true);
-      ipcRenderer.invoke('invoke_解析视频号短链', url).then((data) => {
-        if (data.hasVideo && data.videoUrl) {
-          send({
-            type: 'e_视频捕获',
-            url: data.videoUrl,
-            size: 0,
-            description: data.description,
-            decodeKey: '',
-            hdUrl: null,
-            uploader: data.uploader,
-            platform: '微信视频号',
-            referer: data.referer,
-            noDecrypt: true,
-            coverUrl: data.coverUrl,
-            shareUrl: url,
-          });
-          message.success('视频号解析成功，已加入下载列表');
-          return;
-        }
-        // 匿名 API 只有元数据没 videoUrl：先在列表里插一张信息卡占位。
-        // 用户在桌面微信中播放后，hoxy 拦截到真 videoUrl 会自动合并到这张卡上。
-        if (data.description || data.uploader || data.coverUrl) {
-          send({
-            type: 'e_视频捕获',
-            url: '',
-            size: 0,
-            description: data.description || '视频号视频',
-            decodeKey: '',
-            hdUrl: null,
-            uploader: data.uploader,
-            platform: '微信视频号',
-            referer: data.referer,
-            noDecrypt: true,
-            coverUrl: data.coverUrl,
-            shareUrl: url,
-            infoOnly: true,
-          });
-        }
-        return openInWechat(url, data);
-      }).catch((err) => {
-        message.warning((err?.message || '视频号短链解析失败') + '，请在微信中打开并播放');
-        openInWechat(url);
-      }).finally(() => {
-        setIsParsing(false);
-      });
+      electronAPI
+        .invoke('invoke_解析视频号短链', url)
+        .then((data) => {
+          if (data.hasVideo && data.videoUrl) {
+            send({
+              type: 'e_视频捕获',
+              url: data.videoUrl,
+              size: 0,
+              description: data.description,
+              decodeKey: '',
+              hdUrl: null,
+              uploader: data.uploader,
+              platform: '微信视频号',
+              referer: data.referer,
+              noDecrypt: true,
+              coverUrl: data.coverUrl,
+              shareUrl: url,
+            });
+            message.success('视频号解析成功，已加入下载列表');
+            return;
+          }
+          // 匿名 API 只有元数据没 videoUrl：先在列表里插一张信息卡占位。
+          // 用户在桌面微信中播放后，hoxy 拦截到真 videoUrl 会自动合并到这张卡上。
+          if (data.description || data.uploader || data.coverUrl) {
+            send({
+              type: 'e_视频捕获',
+              url: '',
+              size: 0,
+              description: data.description || '视频号视频',
+              decodeKey: '',
+              hdUrl: null,
+              uploader: data.uploader,
+              platform: '微信视频号',
+              referer: data.referer,
+              noDecrypt: true,
+              coverUrl: data.coverUrl,
+              shareUrl: url,
+              infoOnly: true,
+            });
+          }
+          return openInWechat(url, data);
+        })
+        .catch((err) => {
+          message.warning((err?.message || '视频号短链解析失败') + '，请在微信中打开并播放');
+          openInWechat(url);
+        })
+        .finally(() => {
+          setIsParsing(false);
+        });
       return;
     }
     setIsParsing(true);
-    ipcRenderer.invoke('invoke_解析平台视频', url).then((data) => {
-      send({
-        type: 'e_视频捕获',
-        url: data.url,
-        size: data.size,
-        description: data.description,
-        decodeKey: data.decode_key,
-        hdUrl: data.hd_url,
-        uploader: data.uploader,
-        platform: data.platform,
-        referer: data.referer,
-        noDecrypt: data.noDecrypt,
+    electronAPI
+      .invoke('invoke_解析平台视频', url)
+      .then((data) => {
+        send({
+          type: 'e_视频捕获',
+          url: data.url,
+          size: data.size,
+          description: data.description,
+          decodeKey: data.decode_key,
+          hdUrl: data.hd_url,
+          uploader: data.uploader,
+          platform: data.platform,
+          referer: data.referer,
+          noDecrypt: data.noDecrypt,
+        });
+        message.success(`${data.platform}视频解析成功，已加入下载列表`);
+      })
+      .catch((err) => {
+        message.error(err?.message || '视频解析失败，请换一个链接重试');
+      })
+      .finally(() => {
+        setIsParsing(false);
       });
-      message.success(`${data.platform}视频解析成功，已加入下载列表`);
-    }).catch((err) => {
-      message.error(err?.message || '视频解析失败，请换一个链接重试');
-    }).finally(() => {
-      setIsParsing(false);
-    });
   }, [inputUrl, openInWechat, send]);
 
   const openInBrowser = useCallback(() => {
@@ -148,11 +142,11 @@ function App() {
       return;
     }
     // 视频号交给真实桌面微信打开；其他平台继续使用系统浏览器。
-    if (/(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i.test(url)) {
+    if (WECHAT_URL_REGEX.test(url)) {
       openInWechat(url);
       return;
     }
-    shell.openExternal(url);
+    electronAPI.invoke('invoke_打开外部链接', url).catch(() => message.error('打开链接失败'));
   }, [inputUrl, openInWechat]);
 
   const clearInputUrl = useCallback(() => {
@@ -160,34 +154,31 @@ function App() {
   }, []);
 
   const openDownloadDir = useCallback(() => {
-    ipcRenderer.invoke('invoke_打开视频目录')
+    electronAPI
+      .invoke('invoke_打开视频目录')
       .catch(() => message.error('打开视频目录失败，请先下载一个视频'));
   }, []);
 
-  const redownload = useCallback((record) => {
-    const { url, decodeKey, hdUrl, description, noDecrypt, referer } = record;
-    send({
-      type: 'e_下载',
-      url: hdUrl || url,
-      decodeKey,
-      description,
-      noDecrypt,
-      referer,
-    });
-  }, [send]);
+  const redownload = useCallback(
+    (record) => {
+      const { url, decodeKey, hdUrl, description, noDecrypt, referer } = record;
+      send({
+        type: 'e_下载',
+        url: hdUrl || url,
+        decodeKey,
+        description,
+        noDecrypt,
+        referer,
+      });
+    },
+    [send],
+  );
 
   const isDownloading = state.matches('初始化完成.下载.下载中');
 
   return (
     <div className="App">
-      {state.matches('检测初始化') ? (
-        <div className="App-loading">
-          <div className="App-loading-spinner">
-            <LoadingOutlined style={{ fontSize: 48, color: '#4f46e5' }} />
-          </div>
-          <div className="App-loading-text">正在初始化...</div>
-        </div>
-      ) : null}
+      {state.matches('检测初始化') ? <LoadingScreen /> : null}
 
       {state.matches('初始化完成') ? (
         <div className="App-inited">
@@ -197,9 +188,13 @@ function App() {
                 <LinkOutlined className="App-inited-brand-icon" />
                 <div className="App-inited-brand-copy">
                   <span className="App-inited-brand-title">WebScoop · 拾海</span>
-                  <Text type="secondary" className="App-inited-brand-slogan">弱水三千，掬海一寸，收纳万千。</Text>
+                  <Text type="secondary" className="App-inited-brand-slogan">
+                    弱水三千，掬海一寸，收纳万千。
+                  </Text>
                 </div>
-                <Tag color="purple" className="brand-tag">多平台</Tag>
+                <Tag color="purple" className="brand-tag">
+                  多平台
+                </Tag>
               </div>
               <div className="App-inited-tips">
                 <Text type="secondary" style={{ fontSize: 12 }}>
@@ -221,10 +216,12 @@ function App() {
                           onClick={clearInputUrl}
                         />
                       </Tooltip>
-                    ) : <span />
+                    ) : (
+                      <span />
+                    )
                   }
                   value={inputUrl}
-                  onChange={e => setInputUrl(e.target.value)}
+                  onChange={(e) => setInputUrl(e.target.value)}
                   onPressEnter={handleParseVideo}
                   className="address-input"
                   bordered={false}
@@ -253,6 +250,13 @@ function App() {
               >
                 解析下载
               </Button>
+              <Tooltip title="设置">
+                <Button
+                  onClick={() => setSettingsOpen(true)}
+                  icon={<SettingOutlined />}
+                  className="App-inited-go-btn"
+                />
+              </Tooltip>
             </div>
           </div>
 
@@ -265,7 +269,10 @@ function App() {
               description={
                 <div>
                   <Paragraph style={{ margin: 0 }}>
-                    <b>抖音 / 小红书 / 快手 / B站 / YouTube / X / TikTok / Instagram / Facebook / Vimeo / 微博：</b>
+                    <b>
+                      抖音 / 小红书 / 快手 / B站 / YouTube / X / TikTok / Instagram / Facebook /
+                      Vimeo / 微博：
+                    </b>
                     直接把视频分享链接粘贴到上方输入框，点【解析下载】即可。
                   </Paragraph>
                   <Paragraph style={{ margin: '8px 0 0 0' }}>
@@ -281,10 +288,15 @@ function App() {
               <div className="App-inited-list-header">
                 <div className="App-inited-list-title">
                   <VideoCameraOutlined style={{ color: '#4f46e5', marginRight: 8 }} />
-                  <Text strong style={{ fontSize: 14 }}>已捕获视频</Text>
+                  <Text strong style={{ fontSize: 14 }}>
+                    已捕获视频
+                  </Text>
                 </div>
                 <Space size={8}>
-                  <Tag color={captureList.length > 0 ? '#4f46e5' : 'default'} style={{ borderRadius: 12, margin: 0 }}>
+                  <Tag
+                    color={captureList.length > 0 ? '#4f46e5' : 'default'}
+                    style={{ borderRadius: 12, margin: 0 }}
+                  >
                     {captureList.length} 个
                   </Tag>
                   <Button
@@ -299,150 +311,15 @@ function App() {
                 </Space>
               </div>
               <div className="App-inited-list-table">
-                {captureList.length === 0 ? (
-                  <div className="App-inited-empty">
-                    <VideoCameraOutlined className="App-inited-empty-icon" />
-                    <div className="App-inited-empty-text">粘贴链接解析，或在浏览器播放视频后自动捕获</div>
-                    <div className="App-inited-empty-hint">支持 {supportedPlatformText}</div>
-                  </div>
-                ) : (
-                  <Table
-                    size="middle"
-                    dataSource={captureList}
-                    rowKey={(record) => (record.hdUrl || record.url || record.shareUrl || record.description) + '|' + (record.decodeKey || '')}
-                    showHeader={false}
-                    columns={[
-                      {
-                        dataIndex: 'description',
-                        key: 'description',
-                        render: (value, record) => (
-                          <div className="video-item-title">
-                            <div className="video-item-name">
-                              {record.platform && (
-                                <Tag
-                                  color={platformColors[record.platform] || 'default'}
-                                  className="platform-tag"
-                                >
-                                  {record.platform}
-                                </Tag>
-                              )}
-                              <Text ellipsis={{ tooltip: value }} style={{ fontSize: 13, flex: 1 }}>
-                                {value}
-                              </Text>
-                              {record.hdUrl && (
-                                <Tooltip title="高清版本">
-                                  <Tag color="success" icon={<StarOutlined />} className="hd-tag">HD</Tag>
-                                </Tooltip>
-                              )}
-                              {record.infoOnly && (
-                                <Tooltip title="请在桌面微信中打开并播放该视频，播放后自动补齐视频源">
-                                  <Tag color="warning" icon={<ExclamationCircleOutlined />} className="hd-tag">待播放</Tag>
-                                </Tooltip>
-                              )}
-                            </div>
-                            {record.uploader && (
-                              <Text type="secondary" style={{ fontSize: 11 }} className="video-item-author">
-                                @{record.uploader}
-                              </Text>
-                            )}
-                            {record.capturedAt && (
-                              <Text type="secondary" style={{ fontSize: 11 }} className="video-item-captured-at">
-                                捕获于 {record.capturedAt}
-                              </Text>
-                            )}
-                          </div>
-                        ),
-                        ellipsis: true,
-                      },
-                      {
-                        dataIndex: 'prettySize',
-                        key: 'prettySize',
-                        width: 80,
-                        align: 'right',
-                        render: (value) => (
-                          <Text type="secondary" style={{ fontSize: 12 }}>{value}</Text>
-                        ),
-                      },
-                      {
-                        key: 'action',
-                        width: 104,
-                        align: 'center',
-                        render: (_, record) => {
-                          const { url, decodeKey, hdUrl, description, fullFileName, noDecrypt, referer, infoOnly, shareUrl } = record;
-                          const downloadUrl = hdUrl || url;
-                          const isCurrentDownload = isDownloading && currentUrl === downloadUrl;
-                          const isQueued = downloadQueue.some(item => item.url === downloadUrl);
-                          if (infoOnly) {
-                            return (
-                              <Tooltip title="复制链接并唤起桌面微信，打开播放后自动捕获">
-                                <Button
-                                  icon={<ExportOutlined />}
-                                  type="primary"
-                                  ghost
-                                  onClick={() => openInWechat(shareUrl || 'https://channels.weixin.qq.com/', record)}
-                                  size="small"
-                                  className="download-btn"
-                                >
-                                  微信打开
-                                </Button>
-                              </Tooltip>
-                            );
-                          }
-                          return fullFileName ? (
-                            <Space size={4} direction="vertical" style={{ width: '100%' }}>
-                              <Tooltip title="打开文件位置">
-                                <Button
-                                  icon={<EyeOutlined />}
-                                  type="default"
-                                  onClick={() => shell.openPath(fullFileName)}
-                                  size="small"
-                                  className="view-btn"
-                                  block
-                                >
-                                  查看
-                                </Button>
-                              </Tooltip>
-                              <Tooltip title="文件已删除？重新下载">
-                                <Button
-                                  icon={<RedoOutlined />}
-                                  type="link"
-                                  onClick={() => redownload(record)}
-                                  loading={isCurrentDownload}
-                                  size="small"
-                                  className="redownload-btn"
-                                  block
-                                >
-                                  {isQueued ? '排队中' : '再次下载'}
-                                </Button>
-                              </Tooltip>
-                            </Space>
-                          ) : (
-                            <Button
-                              icon={<DownloadOutlined />}
-                              type="primary"
-                              onClick={() => {
-                                send({
-                                  type: 'e_下载',
-                                  url: downloadUrl,
-                                  decodeKey: decodeKey,
-                                  description: description,
-                                  noDecrypt,
-                                  referer,
-                                });
-                              }}
-                              loading={isCurrentDownload}
-                              size="small"
-                              className="download-btn"
-                            >
-                              {isQueued ? '排队中' : '下载'}
-                            </Button>
-                          );
-                        },
-                      },
-                    ]}
-                    pagination={false}
-                  />
-                )}
+                <CaptureTable
+                  captureList={captureList}
+                  downloadQueue={downloadQueue}
+                  currentUrl={currentUrl}
+                  isDownloading={isDownloading}
+                  send={send}
+                  openInWechat={openInWechat}
+                  redownload={redownload}
+                />
               </div>
             </div>
           </div>
@@ -462,65 +339,24 @@ function App() {
                 <div className="App-inited-download-copy">
                   <div className="App-inited-download-text">后台下载中...</div>
                   <div className="App-inited-download-hint">
-                    可继续浏览、解析和捕获视频{downloadQueue.length ? `，队列 ${downloadQueue.length} 条` : ''}
+                    可继续浏览、解析和捕获视频
+                    {downloadQueue.length ? `，队列 ${downloadQueue.length} 条` : ''}
                   </div>
                 </div>
+                <Button size="small" onClick={cancelDownload} icon={<CloseCircleOutlined />}>
+                  取消
+                </Button>
               </div>
             </div>
           ) : null}
         </div>
       ) : null}
 
-      {state.matches('未初始化') ? (
-        <div className="App-uninit">
-          <div className="App-uninit-card">
-            <div className="App-uninit-icon-wrap">
-              <VideoCameraOutlined className="App-uninit-icon" />
-            </div>
-            <Title level={3} style={{ textAlign: 'center', margin: '16px 0 8px', fontWeight: 600 }}>WebScoop · 拾海</Title>
-            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 8, fontSize: 14 }}>弱水三千，掬海一寸，收纳万千。</Text>
-            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 20, fontSize: 13 }}>多平台链接解析 / 播放自动捕获 / 无水印优先下载</Text>
-            <Alert
-              message="首次使用需要初始化证书"
-              description="本工具通过本地代理方式捕获网络中的视频流，需要安装根证书以支持 HTTPS 解析。证书仅存储在本地，不会上传任何数据。"
-              type="info"
-              showIcon
-              closable={false}
-              style={{ marginBottom: 28, textAlign: 'left', borderRadius: 10 }}
-            />
-            <div className="App-uninit-actions">
-              <Button
-                size="large"
-                onClick={() => send('e_开始初始化')}
-                type="primary"
-                icon={<FormatPainterOutlined />}
-                className="init-btn"
-                block
-              >
-                一键初始化
-              </Button>
-              <Button size="large" onClick={() => send('e_重新检测')} icon={<RedoOutlined />} block>
-                重新检测
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {state.matches('开启服务失败') ? (
-        <div className="App-uninit">
-          <div className="App-uninit-card">
-            <div className="App-uninit-icon-wrap" style={{ background: 'linear-gradient(135deg, #fef2f2, #fee2e2)' }}>
-              <ExclamationCircleOutlined className="App-uninit-icon" style={{ color: '#ef4444' }} />
-            </div>
-            <Title level={3} style={{ textAlign: 'center', margin: '16px 0 8px', fontWeight: 600 }}>代理服务启动失败</Title>
-            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 24 }}>请检查系统网络权限或代理端口是否被占用</Text>
-            <Button size="large" onClick={() => send('e_重试')} type="primary" block className="init-btn">
-              重试
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      {state.matches('未初始化') ? <UninitScreen state={state} send={send} /> : null}
+
+      {state.matches('开启服务失败') ? <ServiceFailedScreen send={send} /> : null}
     </div>
   );
 }
