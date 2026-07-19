@@ -56,11 +56,13 @@
 ![image](https://user-images.githubusercontent.com/11046969/169732926-5c8cfce4-4856-48e2-a268-22e1e5278c2d.png)
 
 
-#### Mac 系统处理
+#### Mac 系统处理（一键授权）
 
-由于新 Mac OS 不支持非交互式执行 sudo 命令，所以本软件初始化时会自动将命令复制到剪切板，你只需要打开 “终端”，粘贴一下就可以了，然后回车执行，效果如下图所示：
+macOS（含 15 Sequoia）要求给本机根证书设信任时必须有一次交互式授权。点「一键初始化」后会弹出**系统原生授权框**，输入本机登录密码并允许即可，无需再打开终端粘贴命令。
 
-![image](https://user-images.githubusercontent.com/11046969/169732943-4815fa79-dda4-4bfd-904c-70d8e625d8f6.png)
+若偶发未设上信任：点「重试自动信任」，或按界面引导在「钥匙串访问」里把 `WebScoop Local CA ...` 设为「始终信任」。
+
+运维排错与里程碑说明见：`docs/OPERATIONS.md`、`docs/MILESTONES.md`。
 
 ---
 

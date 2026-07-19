@@ -1,6 +1,7 @@
 # WebScoop 已实现功能与变更记录
 
-> 面向接手者：一眼看清「现在有什么、最近改了什么」。产品定位见 `README.md`，设计过程见 `docs/plans/`。
+> 面向接手者：一眼看清「现在有什么、最近改了什么」。产品定位见 `README.md`，设计过程见 `docs/plans/`。  
+> **里程碑基线（M1 多平台可用 / M2 安装可用）见 [`docs/MILESTONES.md`](./MILESTONES.md)**——以后迭代证书或初始化逻辑时优先对照 M2。
 
 ## 一、产品概述
 
@@ -73,6 +74,19 @@ CI：`.github/workflows/ci.yml` 在 macOS + Windows 上跑 `lint → format:chec
 ---
 
 ## 六、新增 / 变更点（按时间倒序）
+
+### 2026-07-19 里程碑 M2 验收归档（安装可用 + 多平台实测）
+
+**结论**：相对此前「多平台能下、但 macOS 一键装证书经常失败」的状态，本节点为**第二个里程碑**——安装可用且更便捷，并可作长期参考基线。
+
+- 实测通过：一键初始化（macOS 15 原生授权）；视频号、小红书、B 站、快手等可用。
+- 文档：新增 `docs/MILESTONES.md`（M1/M2 对照、关键实现表、排错命令）；`README.md` Mac 安装说明改为「一键原生授权」，去掉过时的「复制命令到终端」流程。
+- 代码跟进（同提交）：见下条「已存在证书可重信 + 重试页不闪回」。
+
+### 2026-07-18 证书初始化跟进：已存在证书可重信 + 重试页不闪回
+
+- `electron/cert.js`：一键信任前先删 login 钥匙串里同名未信任副本，避免 `add-trusted-cert` 因「证书已存在」写不上信任（本机实测 login+System 都已有 `WebScoop Local CA` 但 `verify-cert` 仍 `CSSMERR_TP_NOT_TRUSTED`）。
+- `src/fsm.js` / `InitScreen.jsx`：用 `needsManualTrustGuide` + `certCommonName` 记住引导态与完整 CN；点「重试自动信任」时不再闪回「首次初始化」文案，剪贴板/搜索用完整证书名。
 
 ### 2026-07-18 一键证书信任改为交互式用户域授权（修复 macOS 15 装不上信任）
 

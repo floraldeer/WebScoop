@@ -24,8 +24,11 @@ export function LoadingScreen() {
 }
 
 export function UninitScreen({ state, send }) {
-  const needsManualTrust = state.matches('未初始化.需要手动信任');
   const installing = state.matches('未初始化.开始初始化');
+  // 用 context 标记，避免「重试自动信任」进入开始初始化时界面闪回首次初始化文案
+  const needsManualTrust =
+    state.matches('未初始化.需要手动信任') || !!state.context.needsManualTrustGuide;
+  const certName = state.context.certCommonName || CERT_COMMON_NAME_PREFIX;
   return (
     <div className="App-uninit">
       <div className="App-uninit-card">
@@ -54,7 +57,7 @@ export function UninitScreen({ state, send }) {
               <span>
                 优先点下方 <b>「重试自动信任」</b>，在弹出的系统授权框输入本机登录密码即可。
                 若仍不行，就手动来：已为你打开「钥匙串访问」并复制证书名称，找到名为
-                <b> {CERT_COMMON_NAME_PREFIX} </b>
+                <b> {certName} </b>
                 的证书，双击它，展开「信任」，把「使用此证书时」改为
                 <b>「始终信任」</b>，关闭窗口输入密码，再点「我已手动信任，重新检测」。
               </span>
@@ -94,9 +97,7 @@ export function UninitScreen({ state, send }) {
               <Button
                 size="large"
                 onClick={() =>
-                  electronAPI
-                    .invoke('invoke_打开钥匙串信任引导', CERT_COMMON_NAME_PREFIX)
-                    .catch(() => {})
+                  electronAPI.invoke('invoke_打开钥匙串信任引导', certName).catch(() => {})
                 }
                 icon={<FolderOpenOutlined />}
                 block

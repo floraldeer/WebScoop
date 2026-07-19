@@ -17,6 +17,9 @@ export default createMachine(
       noDecrypt: false,
       referer: '',
       downloadQueue: [],
+      // 证书已装未信任时记住完整 CN，避免重试自动信任时 UI 闪回「首次初始化」页
+      certCommonName: '',
+      needsManualTrustGuide: false,
     },
     initial: '检测初始化',
     states: {
@@ -39,6 +42,7 @@ export default createMachine(
         on: {
           e_重新检测: {
             target: '检测初始化',
+            actions: 'action_清除手动信任标记',
           },
         },
         states: {
@@ -56,6 +60,7 @@ export default createMachine(
             on: {
               e_需要手动信任: {
                 target: '需要手动信任',
+                actions: 'action_标记需手动信任',
               },
               e_初始化失败: {
                 target: '空闲',
@@ -191,7 +196,7 @@ export default createMachine(
               message.warning(
                 '证书已安装但系统尚未信任，可点「重试自动信任」或手动设为「始终信任」',
               );
-              send('e_需要手动信任');
+              send({ type: 'e_需要手动信任', commonName: result?.commonName || '' });
             } else {
               message.error(result?.message || '证书安装失败，请重试');
               send('e_初始化失败');
@@ -305,6 +310,14 @@ export default createMachine(
         },
     },
     actions: {
+      action_标记需手动信任: actions.assign((_, { commonName }) => ({
+        needsManualTrustGuide: true,
+        certCommonName: commonName || '',
+      })),
+      action_清除手动信任标记: actions.assign(() => ({
+        needsManualTrustGuide: false,
+        certCommonName: '',
+      })),
       action_视频捕获: actions.assign(
         (
           { captureList },

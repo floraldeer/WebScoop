@@ -77,18 +77,43 @@ export function classifyTrustOutcome({ trusted, error, stderr = '' }) {
 // 证书进了钥匙串却没设上信任（CSSMERR_TP_NOT_TRUSTED）。用户域信任无需 root，且同样被
 // SecTrust 认可：security verify-cert、Chromium / 微信 XWeb 都读取 login+System 钥匙串
 // 里「始终信任」的设置。
-function addTrustedCertDarwin() {
+function execSecurity(args) {
   return new Promise((resolve) => {
-    execFile(
-      'security',
-      ['add-trusted-cert', '-r', 'trustRoot', '-p', 'ssl', CONFIG.CERT_PUBLIC_PATH],
-      (error, stdout, stderr) => resolve({ error, stdout: stdout || '', stderr: stderr || '' }),
+    execFile('security', args, (error, stdout, stderr) =>
+      resolve({ error, stdout: stdout || '', stderr: stderr || '' }),
     );
   });
 }
 
+function addTrustedCertDarwin() {
+  return execSecurity([
+    'add-trusted-cert',
+    '-r',
+    'trustRoot',
+    '-p',
+    'ssl',
+    CONFIG.CERT_PUBLIC_PATH,
+  ]);
+}
+
+// login 钥匙串里若已有同名证书但未受信，再次 add-trusted-cert 常因「证书已存在」失败，
+// 信任设置也就写不进去。先从默认（login）钥匙串删掉未信任副本，再走交互式写入。
+// 不动 System.keychain（需要 root）；用户域信任本身足够让 verify-cert / 浏览器通过。
+async function removeUntrustedLoginCopy(commonName) {
+  const result = await execSecurity(['delete-certificate', '-c', commonName]);
+  if (result.error) {
+    log.info(
+      '[cert] delete login copy skipped:',
+      String(result.stderr || result.error.message || '').slice(0, 160),
+    );
+  } else {
+    log.info('[cert] removed existing login-keychain copy before re-trust');
+  }
+}
+
 async function installCertDarwin(identity) {
   log.info('[cert] setting user-domain trust via security add-trusted-cert (interactive)');
+  await removeUntrustedLoginCopy(identity.commonName);
   const { error, stderr } = await addTrustedCertDarwin();
   const trusted = await verifyCertTrusted();
   log.info(
