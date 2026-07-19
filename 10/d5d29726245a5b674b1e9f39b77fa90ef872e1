@@ -1,0 +1,38 @@
+README.md
+  s_a92cdb8705d98e::t_a1530c40ffab09 59,61,63-65
+docs/IMPLEMENTED.md
+  s_a92cdb8705d98e::t_433eacb639d662 3-4,78-90
+docs/MILESTONES.md
+  s_a92cdb8705d98e::t_28eafb32723101 1-75
+docs/OPERATIONS.md
+  s_a92cdb8705d98e::t_ac51128bbd983b 15-16
+electron/cert.js
+  s_a92cdb8705d98e::t_a84cdb8674e34d 80,82-83,88-113,116
+src/components/InitScreen.jsx
+  s_a92cdb8705d98e::t_b0b6a422963972 28-31,60,100
+src/fsm.js
+  s_a92cdb8705d98e::t_bc043b5148e1f0 20-22,45,63,199,313-320
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "10d5d29726245a5b674b1e9f39b77fa90ef872e1",
+  "prompts": {},
+  "humans": {
+    "h_06f142202e32e4": {
+      "author": "floraldeer <floraldeer@outlook.com>"
+    }
+  },
+  "sessions": {
+    "s_a92cdb8705d98e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "679f5806-41fa-47f8-856e-2093cd018b3b",
+        "model": "unknown"
+      },
+      "human_author": "floraldeer <floraldeer@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
