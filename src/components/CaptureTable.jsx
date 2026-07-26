@@ -32,6 +32,16 @@ function TitleCell({ value, record }) {
             </Tag>
           </Tooltip>
         )}
+        {record.quality && !record.isPreview && (
+          <Tooltip title={`已选择账号可访问的最高音质：${record.quality}`}>
+            <Tag
+              color={record.quality.startsWith('FLAC') ? 'success' : 'processing'}
+              className="hd-tag"
+            >
+              {record.quality}
+            </Tag>
+          </Tooltip>
+        )}
         {record.isPreview && (
           <Tooltip title="QQ 音乐官方试听音频；登录后重新解析可尝试获取完整音频">
             <Tag color="warning" className="hd-tag">

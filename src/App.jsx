@@ -125,13 +125,15 @@ function App() {
           referer: data.referer,
           noDecrypt: data.noDecrypt,
           extension: data.extension,
+          quality: data.quality,
           isPreview: data.isPreview,
           shareUrl: data.sourceUrl || url,
         });
         if (data.isPreview) {
           message.warning('完整音频需要 QQ 音乐登录权限，已加入官方试听；登录后可重新解析');
         } else {
-          message.success(`${data.platform}解析成功，已加入下载列表`);
+          const quality = data.quality ? ` ${data.quality}` : '';
+          message.success(`${data.platform}${quality}解析成功，已加入下载列表`);
         }
       })
       .catch((err) => {

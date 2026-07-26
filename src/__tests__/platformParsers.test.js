@@ -25,6 +25,7 @@ import {
   getMediaSizeFromHeaders,
   parseKuaishouInitialState,
   parsePlatformVideo,
+  selectQqMusicAudio,
 } from '../../electron/platformParsers';
 
 describe('platform parser media size', () => {
@@ -155,18 +156,25 @@ describe('platform parser media size', () => {
   });
 
   test('builds current QQ Music vkey payload for the full audio file', () => {
-    expect(
-      buildQqMusicVkeyPayload(
-        {
-          mid: '000t7dhP0tQaSi',
-          type: 0,
-          file: { media_mid: '002ucvcB2rA3n4' },
+    const payload = buildQqMusicVkeyPayload(
+      {
+        mid: '000t7dhP0tQaSi',
+        type: 0,
+        file: {
+          media_mid: '002ucvcB2rA3n4',
+          size_flac: 26772996,
+          size_320mp3: 8538987,
+          size_128mp3: 3415683,
+          size_192aac: 5175940,
+          size_96aac: 2608668,
         },
-        '',
-        false,
-        'test-guid',
-      ),
-    ).toMatchObject({
+      },
+      '',
+      false,
+      'test-guid',
+    );
+
+    expect(payload).toMatchObject({
       comm: {
         ct: 24,
         cv: 4747474,
@@ -178,12 +186,18 @@ describe('platform parser media size', () => {
         method: 'UrlGetVkey',
         param: {
           guid: 'test-guid',
-          songmid: ['000t7dhP0tQaSi'],
-          songtype: [0],
-          filename: ['C400002ucvcB2rA3n4.m4a'],
+          filename: [
+            'F000002ucvcB2rA3n4.flac',
+            'M800002ucvcB2rA3n4.mp3',
+            'M500002ucvcB2rA3n4.mp3',
+            'C600002ucvcB2rA3n4.m4a',
+            'C400002ucvcB2rA3n4.m4a',
+          ],
         },
       },
     });
+    expect(payload.req_0.param.songmid).toEqual(Array(5).fill('000t7dhP0tQaSi'));
+    expect(payload.req_0.param.songtype).toEqual(Array(5).fill(0));
   });
 
   test('builds current QQ Music vkey payload for the official preview file', () => {
@@ -222,6 +236,80 @@ describe('platform parser media size', () => {
       g_tk_new_20200303: 1926538631,
     });
     expect(payload.req_0.param.uin).toBe('123456');
+  });
+
+  test('selects QQ Music FLAC when the account can access lossless audio', () => {
+    expect(
+      selectQqMusicAudio(
+        {
+          req_0: {
+            data: {
+              sip: ['https://isure.stream.qqmusic.qq.com/'],
+              midurlinfo: [
+                {
+                  filename: 'F000002ucvcB2rA3n4.flac',
+                  purl: 'F000002ucvcB2rA3n4.flac?vkey=flac',
+                  result: 0,
+                },
+              ],
+            },
+          },
+        },
+        {
+          mid: '000t7dhP0tQaSi',
+          file: { media_mid: '002ucvcB2rA3n4', size_flac: 26772996 },
+        },
+        false,
+      ),
+    ).toMatchObject({
+      url: 'https://isure.stream.qqmusic.qq.com/F000002ucvcB2rA3n4.flac?vkey=flac',
+      filename: 'F000002ucvcB2rA3n4.flac',
+      extension: '.flac',
+      quality: 'FLAC 无损',
+      size: 26772996,
+      isPreview: false,
+    });
+  });
+
+  test('falls back to QQ Music MP3 320K when FLAC is unauthorized', () => {
+    expect(
+      selectQqMusicAudio(
+        {
+          req_0: {
+            data: {
+              sip: ['https://isure.stream.qqmusic.qq.com/'],
+              midurlinfo: [
+                {
+                  filename: 'F000002ucvcB2rA3n4.flac',
+                  purl: '',
+                  result: 104003,
+                },
+                {
+                  filename: 'M800002ucvcB2rA3n4.mp3',
+                  purl: 'M800002ucvcB2rA3n4.mp3?vkey=mp3',
+                  result: 0,
+                },
+              ],
+            },
+          },
+        },
+        {
+          mid: '000t7dhP0tQaSi',
+          file: {
+            media_mid: '002ucvcB2rA3n4',
+            size_flac: 26772996,
+            size_320mp3: 8538987,
+          },
+        },
+        false,
+      ),
+    ).toMatchObject({
+      filename: 'M800002ucvcB2rA3n4.mp3',
+      extension: '.mp3',
+      quality: 'MP3 320K',
+      size: 8538987,
+      isPreview: false,
+    });
   });
 
   test('falls back to a labeled QQ Music preview when full audio is unauthorized', async () => {
@@ -292,6 +380,7 @@ describe('platform parser media size', () => {
       description: '【试听】爱情买卖 - 慕容晓晓',
       platform: 'QQ音乐',
       extension: '.mp3',
+      quality: '官方试听',
       isPreview: true,
       size: 960887,
     });

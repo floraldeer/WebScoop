@@ -635,6 +635,50 @@ function getQqMusicHeaders(cookie = '') {
   };
 }
 
+const QQ_MUSIC_FULL_QUALITY_PROFILES = [
+  { prefix: 'F000', extension: '.flac', sizeKey: 'size_flac', quality: 'FLAC 无损' },
+  { prefix: 'M800', extension: '.mp3', sizeKey: 'size_320mp3', quality: 'MP3 320K' },
+  { prefix: 'M500', extension: '.mp3', sizeKey: 'size_128mp3', quality: 'MP3 128K' },
+  { prefix: 'C600', extension: '.m4a', sizeKey: 'size_192aac', quality: 'AAC 192K' },
+  { prefix: 'C400', extension: '.m4a', sizeKey: 'size_96aac', quality: 'AAC 96K' },
+];
+
+function getQqMusicFileCandidates(song, isPreview) {
+  const mediaMid = String(song?.file?.media_mid || song?.mid || '');
+  if (!mediaMid) throw new Error('QQ音乐歌曲缺少媒体文件标识');
+
+  if (isPreview) {
+    return [
+      {
+        filename: `RS02${mediaMid}.mp3`,
+        extension: '.mp3',
+        quality: '官方试听',
+        size: Number(song?.file?.size_try || 0),
+      },
+    ];
+  }
+
+  const candidates = QQ_MUSIC_FULL_QUALITY_PROFILES.filter(
+    (profile) => Number(song?.file?.[profile.sizeKey] || 0) > 0,
+  ).map((profile) => ({
+    filename: `${profile.prefix}${mediaMid}${profile.extension}`,
+    extension: profile.extension,
+    quality: profile.quality,
+    size: Number(song.file[profile.sizeKey]),
+  }));
+
+  return candidates.length
+    ? candidates
+    : [
+        {
+          filename: `C400${mediaMid}.m4a`,
+          extension: '.m4a',
+          quality: 'AAC 96K',
+          size: 0,
+        },
+      ];
+}
+
 async function fetchQqMusicSongInfo(identity, cookie) {
   const params = {
     format: 'json',
@@ -669,15 +713,39 @@ export function buildQqMusicAudioUrl(vkeyBody = {}) {
   return new URL(purl, sip).toString();
 }
 
+export function selectQqMusicAudio(vkeyBody, song, isPreview = false) {
+  const data = vkeyBody?.req_0?.data || vkeyBody?.data || vkeyBody || {};
+  const items = Array.isArray(data.midurlinfo) ? data.midurlinfo : [];
+  const candidates = getQqMusicFileCandidates(song, isPreview);
+  const selected = candidates
+    .map((candidate) => ({
+      candidate,
+      item: items.find((item) => item?.filename === candidate.filename),
+    }))
+    .find(({ item }) => Number(item?.result) === 0 && item?.purl);
+
+  if (!selected) return null;
+  const { candidate, item } = selected;
+  const sip = (data.sip || []).find(Boolean) || 'https://isure.stream.qqmusic.qq.com/';
+  const url = /^https?:\/\//i.test(item.purl) ? item.purl : new URL(item.purl, sip).toString();
+  return {
+    url,
+    filename: candidate.filename,
+    extension: candidate.extension,
+    quality: candidate.quality,
+    size: candidate.size,
+    isPreview,
+  };
+}
+
 export function buildQqMusicVkeyPayload(
   song,
   cookie = '',
   isPreview = false,
   guid = getQqMusicGuid(cookie),
 ) {
-  const mediaMid = String(song?.file?.media_mid || song?.mid || '');
   const songMid = String(song?.mid || '');
-  if (!mediaMid || !songMid) {
+  if (!songMid) {
     throw new Error('QQ音乐歌曲缺少音源标识');
   }
 
@@ -685,7 +753,7 @@ export function buildQqMusicVkeyPayload(
   const numericUin = Number(uin);
   const commUin = Number.isSafeInteger(numericUin) ? numericUin : uin;
   const gTk = getQqMusicGtk(cookie);
-  const filename = isPreview ? `RS02${mediaMid}.mp3` : `C400${mediaMid}.m4a`;
+  const candidates = getQqMusicFileCandidates(song, isPreview);
 
   return {
     comm: {
@@ -707,10 +775,10 @@ export function buildQqMusicVkeyPayload(
       method: 'UrlGetVkey',
       param: {
         uin: uin === '0' ? '' : uin,
-        filename: [filename],
+        filename: candidates.map((candidate) => candidate.filename),
         guid,
-        songmid: [songMid],
-        songtype: [Number(song?.type) || 0],
+        songmid: candidates.map(() => songMid),
+        songtype: candidates.map(() => Number(song?.type) || 0),
         ctx: 0,
       },
     },
@@ -733,14 +801,6 @@ async function fetchQqMusicVkey(song, cookie, isPreview) {
   return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
 }
 
-function getQqMusicSize(song, extension, isPreview) {
-  const file = song?.file || {};
-  if (isPreview) return Number(file.size_try || 0);
-  if (extension === '.flac') return Number(file.size_flac || file.size_hires || 0);
-  if (extension === '.mp3') return Number(file.size_320mp3 || file.size_128mp3 || 0);
-  return Number(file.size_96aac || file.size_48aac || file.size_192aac || file.size_128mp3 || 0);
-}
-
 function buildQqMusicUnavailableMessage(fullBody, previewBody) {
   const fullResult = fullBody?.req_0?.data?.midurlinfo?.[0]?.result;
   const previewResult = previewBody?.req_0?.data?.midurlinfo?.[0]?.result;
@@ -756,18 +816,15 @@ async function parseQqMusic(inputUrl) {
   const song = await fetchQqMusicSongInfo(identity, cookie);
   const fullBody = await fetchQqMusicVkey(song, cookie, false);
   let body = fullBody;
-  let audioUrl = buildQqMusicAudioUrl(fullBody);
-  let isPreview = false;
+  let selected = selectQqMusicAudio(fullBody, song, false);
 
-  if (!audioUrl) {
+  if (!selected) {
     body = await fetchQqMusicVkey(song, cookie, true);
-    audioUrl = buildQqMusicAudioUrl(body);
-    isPreview = true;
+    selected = selectQqMusicAudio(body, song, true);
   }
-  if (!audioUrl) throw new Error(buildQqMusicUnavailableMessage(fullBody, body));
+  if (!selected) throw new Error(buildQqMusicUnavailableMessage(fullBody, body));
 
-  const extension = path.extname(new URL(audioUrl).pathname).toLowerCase() || '.m4a';
-  const mediaInfo = await inspectVideoUrl(audioUrl, 'https://y.qq.com/');
+  const mediaInfo = await inspectVideoUrl(selected.url, 'https://y.qq.com/');
   const singers = (song.singer || [])
     .map((item) => item?.name)
     .filter(Boolean)
@@ -775,20 +832,20 @@ async function parseQqMusic(inputUrl) {
   const title = String(song.title || song.name || 'QQ音乐歌曲').trim();
 
   return {
-    url: audioUrl,
-    size: mediaInfo.size || getQqMusicSize(song, extension, isPreview),
-    description: `${isPreview ? '【试听】' : ''}${singers ? `${title} - ${singers}` : title}`.slice(
-      0,
-      80,
-    ),
+    url: selected.url,
+    size: mediaInfo.size || selected.size,
+    description: `${selected.isPreview ? '【试听】' : ''}${
+      singers ? `${title} - ${singers}` : title
+    }`.slice(0, 80),
     decode_key: '',
     hd_url: null,
     uploader: singers,
     platform: 'QQ音乐',
     referer: `https://y.qq.com/n/ryqq/songDetail/${song.mid}`,
     noDecrypt: true,
-    extension,
-    isPreview,
+    extension: selected.extension,
+    quality: selected.quality,
+    isPreview: selected.isPreview,
     sourceUrl: url,
   };
 }
