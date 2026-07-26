@@ -10,6 +10,7 @@ import { installCert, checkCertInstalled, CERT_STATUS } from './cert';
 import { downloadFile, getAvailableFilePath, normalizeMediaExtension } from './utils';
 import { parsePlatformVideo } from './platformParsers';
 import { parseWechatShortLink } from './wechatFinder';
+import { isQqMusicLoginPopupUrl, parseQqMusicUrl } from './qqMusicLogin';
 import { getHistory, addHistoryRecord, clearHistory } from './downloadHistory';
 import { getSettings, updateSettings } from './appSettings';
 
@@ -19,20 +20,6 @@ let lastDownloadDir = '';
 const downloadedFiles = new Set();
 // 正在进行的下载：fullFileName -> AbortController，供"取消下载"使用。
 const activeDownloads = new Map();
-
-function parseQqMusicUrl(inputUrl) {
-  const url = new URL(String(inputUrl || ''));
-  const hostname = url.hostname.toLowerCase();
-  const isQqMusicHost =
-    hostname === 'y.qq.com' ||
-    hostname.endsWith('.y.qq.com') ||
-    hostname === 'qqmusic.qq.com' ||
-    hostname.endsWith('.qqmusic.qq.com');
-  if (url.protocol !== 'https:' || !isQqMusicHost) {
-    throw new Error('只允许打开 QQ 音乐 HTTPS 链接');
-  }
-  return url.toString();
-}
 
 async function openQqMusicWindow(inputUrl) {
   const url = parseQqMusicUrl(inputUrl);
@@ -59,8 +46,25 @@ async function openQqMusicWindow(inputUrl) {
     },
   });
   qqMusicWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    if (/^https?:\/\//i.test(targetUrl)) shell.openExternal(targetUrl);
-    return { action: 'deny' };
+    if (!isQqMusicLoginPopupUrl(targetUrl)) return { action: 'deny' };
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        parent: qqMusicWindow,
+        width: 760,
+        height: 760,
+        minWidth: 560,
+        minHeight: 560,
+        autoHideMenuBar: true,
+        webPreferences: {
+          session: session.defaultSession,
+          webSecurity: true,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      },
+    };
   });
   qqMusicWindow.webContents.on('will-navigate', (event, targetUrl) => {
     if (!/^https?:\/\//i.test(targetUrl)) event.preventDefault();

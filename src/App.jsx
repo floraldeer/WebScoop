@@ -9,6 +9,7 @@ import {
   FolderOpenOutlined,
   CloseCircleOutlined,
   SettingOutlined,
+  LoginOutlined,
 } from '@ant-design/icons';
 import fsm from './fsm';
 import { QQ_MUSIC_URL_REGEX, supportedPlatformText, WECHAT_URL_REGEX } from './constants';
@@ -169,6 +170,13 @@ function App() {
     setInputUrl('');
   }, []);
 
+  const openQqMusicLogin = useCallback(() => {
+    electronAPI
+      .invoke('invoke_打开QQ音乐')
+      .then(() => message.info('请在 QQ 音乐窗口右上角登录，完成后回到此处重新解析'))
+      .catch((err) => message.error(err?.message || '打开 QQ 音乐登录窗口失败'));
+  }, []);
+
   const openDownloadDir = useCallback(() => {
     electronAPI
       .invoke('invoke_打开视频目录')
@@ -253,6 +261,13 @@ function App() {
                 打开链接
               </Button>
               <Button
+                onClick={openQqMusicLogin}
+                icon={<LoginOutlined />}
+                className="App-inited-qqmusic-login-btn"
+              >
+                登录QQ音乐
+              </Button>
+              <Button
                 onClick={openDownloadDir}
                 icon={<FolderOpenOutlined />}
                 className="App-inited-go-btn"
@@ -299,8 +314,8 @@ function App() {
                   </Paragraph>
                   <Paragraph style={{ margin: '8px 0 0 0' }}>
                     <b>QQ音乐：</b>
-                    直接解析会优先获取完整音频；若账号未登录或无完整音频权限，则加入官方试听。
-                    点击【打开链接】可在 QQ 音乐窗口登录，登录后重新解析。
+                    先点击【登录QQ音乐】，在内置窗口完成登录；再粘贴歌曲链接并解析。
+                    程序会选择账号可访问的最高完整音质，无权限时加入官方试听。
                   </Paragraph>
                 </div>
               }
