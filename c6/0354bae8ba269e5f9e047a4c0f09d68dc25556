@@ -1,0 +1,14 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c60354bae8ba269e5f9e047a4c0f09d68dc25556",
+  "prompts": {},
+  "humans": {
+    "h_06f142202e32e4": {
+      "author": "floraldeer <floraldeer@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
