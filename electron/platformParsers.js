@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { execFileSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import { app, session } from 'electron';
 import youtubedl from 'youtube-dl-exec';
@@ -71,6 +72,11 @@ export const PLATFORM_CONFIGS = [
     platform: '微博',
     hosts: ['weibo.com', 'weibo.cn', 'sinaimg.cn'],
     parser: 'ytdlp',
+  },
+  {
+    platform: 'QQ音乐',
+    hosts: ['i.y.qq.com', 'y.qq.com', 'u.y.qq.com', 'c.y.qq.com', 'qqmusic.qq.com'],
+    parser: 'qqmusic',
   },
 ];
 
@@ -175,8 +181,8 @@ function scoreVideoUrl(url) {
 
 function isLikelyVideoUrl(url) {
   return (
-    /\.(mp4|mov|m4v|webm)(\?|$)/i.test(url) ||
-    /douyinvod|bytecdn|xhscdn|sns-video|kuaishou|gifshow|ksapisrv|videocdn|bilivideo|googlevideo|tos-/i.test(
+    /\.(mp4|mov|m4v|webm|mp3|m4a|aac|flac|ogg|wav)(\?|$)/i.test(url) ||
+    /douyinvod|bytecdn|xhscdn|sns-video|kuaishou|gifshow|ksapisrv|videocdn|bilivideo|googlevideo|tos-|stream\.qqmusic|music\.tc\.qq\.com/i.test(
       url,
     )
   );
@@ -220,7 +226,10 @@ async function inspectVideoUrl(url, referer) {
     const contentType = response.headers?.['content-type'] || '';
     const resolvedUrl = response.request?.res?.responseUrl || url;
     return {
-      valid: contentType.includes('video/') || /\.(mp4|mov|m4v|webm)(\?|$)/i.test(resolvedUrl),
+      valid:
+        contentType.includes('video/') ||
+        contentType.includes('audio/') ||
+        /\.(mp4|mov|m4v|webm|mp3|m4a|aac|flac|ogg|wav)(\?|$)/i.test(resolvedUrl),
       size: getMediaSizeFromHeaders(response.headers, response.status),
     };
   } catch (e) {
@@ -563,6 +572,227 @@ async function parseBilibili(inputUrl) {
   };
 }
 
+export function extractQqMusicSongIdentity(inputUrl) {
+  const url = ensureHttpUrl(inputUrl);
+  const parsed = new URL(url);
+  const querySongId = parsed.searchParams.get('songid') || parsed.searchParams.get('songId');
+  const querySongMid = parsed.searchParams.get('songmid') || parsed.searchParams.get('songMid');
+  const pathValue =
+    parsed.pathname.match(/\/(?:songDetail|song)\/([^/?#]+?)(?:\.html)?$/i)?.[1] || '';
+  const pathSongId = /^\d+$/.test(pathValue) ? pathValue : '';
+  const pathSongMid = pathValue && !pathSongId ? pathValue : '';
+  const parsedSongType = Number.parseInt(parsed.searchParams.get('songtype') || '0', 10);
+
+  const identity = {
+    songid: querySongId || pathSongId,
+    songmid: querySongMid || pathSongMid,
+    songtype: Number.isFinite(parsedSongType) ? parsedSongType : 0,
+  };
+
+  if (!identity.songid && !identity.songmid) {
+    throw new Error('未识别到 QQ音乐 songid/songmid，请确认链接');
+  }
+  return identity;
+}
+
+function getCookieValue(cookie = '', name = '') {
+  const pattern = new RegExp(`(?:^|;\\s*)${name}=([^;]*)`);
+  const match = String(cookie).match(pattern);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function getQqMusicGuid(cookie = '') {
+  const pgvPvid = getCookieValue(cookie, 'pgv_pvid');
+  if (/^\d+$/.test(pgvPvid)) return pgvPvid;
+  return randomUUID().replace(/-/g, '');
+}
+
+function getQqMusicUin(cookie = '') {
+  const uin = (getCookieValue(cookie, 'uin') || getCookieValue(cookie, 'qqmusic_uin')).replace(
+    /^o/i,
+    '',
+  );
+  return /^\d+$/.test(uin) ? uin : '0';
+}
+
+function getQqMusicGtk(cookie = '') {
+  const key = getCookieValue(cookie, 'qm_keyst') || getCookieValue(cookie, 'qqmusic_key') || '';
+  let hash = 5381;
+  for (const character of key) {
+    hash = ((hash << 5) + hash + character.charCodeAt(0)) & 0x7fffffff;
+  }
+  return hash;
+}
+
+function getQqMusicHeaders(cookie = '') {
+  return {
+    ...DEFAULT_HEADERS,
+    'User-Agent':
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    Referer: 'https://y.qq.com/',
+    Origin: 'https://y.qq.com',
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+}
+
+async function fetchQqMusicSongInfo(identity, cookie) {
+  const params = {
+    format: 'json',
+    platform: 'yqq',
+    needNewCode: 0,
+    songtype: identity.songtype,
+  };
+  if (identity.songid) params.songid = identity.songid;
+  if (!identity.songid && identity.songmid) params.songmid = identity.songmid;
+
+  const response = await axios.get('https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg', {
+    params,
+    timeout: 15000,
+    headers: getQqMusicHeaders(cookie),
+    validateStatus: (status) => status >= 200 && status < 400,
+  });
+  const body = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+  const song = Array.isArray(body?.data) ? body.data[0] : null;
+  if (!song?.mid) {
+    throw new Error('QQ音乐歌曲信息获取失败，请确认链接有效');
+  }
+  return song;
+}
+
+export function buildQqMusicAudioUrl(vkeyBody = {}) {
+  const data = vkeyBody?.req_0?.data || vkeyBody?.data || vkeyBody;
+  const item = (data?.midurlinfo || []).find((entry) => entry?.purl);
+  const purl = item?.purl || '';
+  if (!purl) return '';
+  if (/^https?:\/\//i.test(purl)) return purl;
+  const sip = (data?.sip || []).find(Boolean) || 'https://dl.stream.qqmusic.qq.com/';
+  return new URL(purl, sip).toString();
+}
+
+export function buildQqMusicVkeyPayload(
+  song,
+  cookie = '',
+  isPreview = false,
+  guid = getQqMusicGuid(cookie),
+) {
+  const mediaMid = String(song?.file?.media_mid || song?.mid || '');
+  const songMid = String(song?.mid || '');
+  if (!mediaMid || !songMid) {
+    throw new Error('QQ音乐歌曲缺少音源标识');
+  }
+
+  const uin = getQqMusicUin(cookie);
+  const numericUin = Number(uin);
+  const commUin = Number.isSafeInteger(numericUin) ? numericUin : uin;
+  const gTk = getQqMusicGtk(cookie);
+  const filename = isPreview ? `RS02${mediaMid}.mp3` : `C400${mediaMid}.m4a`;
+
+  return {
+    comm: {
+      ct: 24,
+      cv: 4747474,
+      platform: 'yqq.json',
+      chid: '0',
+      uin: commUin,
+      g_tk: gTk,
+      g_tk_new_20200303: gTk,
+      format: 'json',
+      inCharset: 'utf-8',
+      outCharset: 'utf-8',
+      notice: 0,
+      need_new_code: 1,
+    },
+    req_0: {
+      module: 'music.vkey.GetVkey',
+      method: 'UrlGetVkey',
+      param: {
+        uin: uin === '0' ? '' : uin,
+        filename: [filename],
+        guid,
+        songmid: [songMid],
+        songtype: [Number(song?.type) || 0],
+        ctx: 0,
+      },
+    },
+  };
+}
+
+async function fetchQqMusicVkey(song, cookie, isPreview) {
+  const response = await axios.post(
+    'https://u.y.qq.com/cgi-bin/musicu.fcg',
+    buildQqMusicVkeyPayload(song, cookie, isPreview),
+    {
+      timeout: 15000,
+      headers: {
+        ...getQqMusicHeaders(cookie),
+        'Content-Type': 'application/json',
+      },
+      validateStatus: (status) => status >= 200 && status < 400,
+    },
+  );
+  return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+}
+
+function getQqMusicSize(song, extension, isPreview) {
+  const file = song?.file || {};
+  if (isPreview) return Number(file.size_try || 0);
+  if (extension === '.flac') return Number(file.size_flac || file.size_hires || 0);
+  if (extension === '.mp3') return Number(file.size_320mp3 || file.size_128mp3 || 0);
+  return Number(file.size_96aac || file.size_48aac || file.size_192aac || file.size_128mp3 || 0);
+}
+
+function buildQqMusicUnavailableMessage(fullBody, previewBody) {
+  const fullResult = fullBody?.req_0?.data?.midurlinfo?.[0]?.result;
+  const previewResult = previewBody?.req_0?.data?.midurlinfo?.[0]?.result;
+  return `QQ音乐音源获取失败：完整音频结果 ${fullResult ?? '未知'}，试听结果 ${
+    previewResult ?? '未知'
+  }。`;
+}
+
+async function parseQqMusic(inputUrl) {
+  const url = ensureHttpUrl(inputUrl);
+  const cookie = await getCookieHeader('https://y.qq.com/');
+  const identity = extractQqMusicSongIdentity(url);
+  const song = await fetchQqMusicSongInfo(identity, cookie);
+  const fullBody = await fetchQqMusicVkey(song, cookie, false);
+  let body = fullBody;
+  let audioUrl = buildQqMusicAudioUrl(fullBody);
+  let isPreview = false;
+
+  if (!audioUrl) {
+    body = await fetchQqMusicVkey(song, cookie, true);
+    audioUrl = buildQqMusicAudioUrl(body);
+    isPreview = true;
+  }
+  if (!audioUrl) throw new Error(buildQqMusicUnavailableMessage(fullBody, body));
+
+  const extension = path.extname(new URL(audioUrl).pathname).toLowerCase() || '.m4a';
+  const mediaInfo = await inspectVideoUrl(audioUrl, 'https://y.qq.com/');
+  const singers = (song.singer || [])
+    .map((item) => item?.name)
+    .filter(Boolean)
+    .join('、');
+  const title = String(song.title || song.name || 'QQ音乐歌曲').trim();
+
+  return {
+    url: audioUrl,
+    size: mediaInfo.size || getQqMusicSize(song, extension, isPreview),
+    description: `${isPreview ? '【试听】' : ''}${singers ? `${title} - ${singers}` : title}`.slice(
+      0,
+      80,
+    ),
+    decode_key: '',
+    hd_url: null,
+    uploader: singers,
+    platform: 'QQ音乐',
+    referer: `https://y.qq.com/n/ryqq/songDetail/${song.mid}`,
+    noDecrypt: true,
+    extension,
+    isPreview,
+    sourceUrl: url,
+  };
+}
+
 async function fetchResolvedPage(inputUrl) {
   const url = ensureHttpUrl(inputUrl);
   const cookie = await getCookieHeader(url);
@@ -753,6 +983,10 @@ export async function parsePlatformVideo(inputUrl) {
     return parseWithYtDlp(initialUrl, initialConfig.platform, await getCookieHeader(initialUrl));
   }
 
+  if (initialConfig?.parser === 'qqmusic') {
+    return parseQqMusic(initialUrl);
+  }
+
   if (initialConfig?.parser === 'bili') {
     try {
       return await parseBilibili(initialUrl);
@@ -781,6 +1015,10 @@ export async function parsePlatformVideo(inputUrl) {
 
   if (config.parser === 'ytdlp') {
     return parseWithYtDlp(page.resolvedUrl, platform, page.cookie);
+  }
+
+  if (config.parser === 'qqmusic') {
+    return parseQqMusic(page.resolvedUrl);
   }
 
   if (config.parser === 'bili') {

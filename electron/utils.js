@@ -6,6 +6,19 @@ import { getDecryptionArray } from './decrypt';
 import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 
+const SUPPORTED_MEDIA_EXTENSIONS = new Set([
+  '.mp4',
+  '.mov',
+  '.m4v',
+  '.webm',
+  '.mp3',
+  '.m4a',
+  '.aac',
+  '.flac',
+  '.ogg',
+  '.wav',
+]);
+
 function xorTransform(decryptionArray) {
   let processedBytes = 0;
   return new Transform({
@@ -24,14 +37,23 @@ function xorTransform(decryptionArray) {
 }
 
 function getAvailableFilePath(directory, baseName, extension = '.mp4') {
+  const safeExtension = normalizeMediaExtension(extension);
   let index = 0;
   let candidate;
   do {
     const suffix = index ? ` (${index})` : '';
-    candidate = path.join(directory, `${baseName}${suffix}${extension}`);
+    candidate = path.join(directory, `${baseName}${suffix}${safeExtension}`);
     index++;
   } while (fs.existsSync(candidate));
   return candidate;
+}
+
+function normalizeMediaExtension(extension = '.mp4') {
+  const raw = String(extension || '.mp4')
+    .trim()
+    .toLowerCase();
+  const value = raw.startsWith('.') ? raw : `.${raw}`;
+  return SUPPORTED_MEDIA_EXTENSIONS.has(value) ? value : '.mp4';
 }
 
 const isRetriableError = (error) => {
@@ -126,4 +148,4 @@ async function downloadFile(url, decodeKey, fullFileName, progressCallback, opti
   }
 }
 
-export { downloadFile, getAvailableFilePath };
+export { downloadFile, getAvailableFilePath, normalizeMediaExtension };

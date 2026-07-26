@@ -11,7 +11,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import fsm from './fsm';
-import { supportedPlatformText, WECHAT_URL_REGEX } from './constants';
+import { QQ_MUSIC_URL_REGEX, supportedPlatformText, WECHAT_URL_REGEX } from './constants';
 import { LoadingScreen, UninitScreen, ServiceFailedScreen } from './components/InitScreen';
 import CaptureTable from './components/CaptureTable';
 import SettingsDrawer from './components/SettingsDrawer';
@@ -51,7 +51,7 @@ function App() {
   const handleParseVideo = useCallback(() => {
     const url = inputUrl.trim();
     if (!url) {
-      message.warning(`请输入 ${supportedPlatformText} 视频链接`);
+      message.warning(`请输入 ${supportedPlatformText} 链接`);
       return;
     }
     // 视频号：先拿元信息并创建占位项，再把链接复制到桌面微信。
@@ -124,11 +124,18 @@ function App() {
           platform: data.platform,
           referer: data.referer,
           noDecrypt: data.noDecrypt,
+          extension: data.extension,
+          isPreview: data.isPreview,
+          shareUrl: data.sourceUrl || url,
         });
-        message.success(`${data.platform}视频解析成功，已加入下载列表`);
+        if (data.isPreview) {
+          message.warning('完整音频需要 QQ 音乐登录权限，已加入官方试听；登录后可重新解析');
+        } else {
+          message.success(`${data.platform}解析成功，已加入下载列表`);
+        }
       })
       .catch((err) => {
-        message.error(err?.message || '视频解析失败，请换一个链接重试');
+        message.error(err?.message || '媒体解析失败，请换一个链接重试');
       })
       .finally(() => {
         setIsParsing(false);
@@ -138,12 +145,19 @@ function App() {
   const openInBrowser = useCallback(() => {
     const url = inputUrl.trim();
     if (!url) {
-      message.warning('请先粘贴视频分享链接');
+      message.warning('请先粘贴媒体分享链接');
       return;
     }
-    // 视频号交给真实桌面微信打开；其他平台继续使用系统浏览器。
+    // 视频号交给真实桌面微信；QQ 音乐使用共享登录态的安全窗口；其他平台使用系统浏览器。
     if (WECHAT_URL_REGEX.test(url)) {
       openInWechat(url);
+      return;
+    }
+    if (QQ_MUSIC_URL_REGEX.test(url)) {
+      electronAPI
+        .invoke('invoke_打开QQ音乐', url)
+        .then(() => message.info('请在 QQ 音乐窗口内登录，登录后重新点击【解析下载】'))
+        .catch((err) => message.error(err?.message || '打开 QQ 音乐失败'));
       return;
     }
     electronAPI.invoke('invoke_打开外部链接', url).catch(() => message.error('打开链接失败'));
@@ -156,12 +170,12 @@ function App() {
   const openDownloadDir = useCallback(() => {
     electronAPI
       .invoke('invoke_打开视频目录')
-      .catch(() => message.error('打开视频目录失败，请先下载一个视频'));
+      .catch(() => message.error('打开下载目录失败，请先下载一个媒体文件'));
   }, []);
 
   const redownload = useCallback(
     (record) => {
-      const { url, decodeKey, hdUrl, description, noDecrypt, referer } = record;
+      const { url, decodeKey, hdUrl, description, noDecrypt, referer, extension } = record;
       send({
         type: 'e_下载',
         url: hdUrl || url,
@@ -169,6 +183,7 @@ function App() {
         description,
         noDecrypt,
         referer,
+        extension,
       });
     },
     [send],
@@ -206,7 +221,7 @@ function App() {
             <div className="App-inited-toolbar">
               <div className="App-inited-addressbar">
                 <Input
-                  placeholder="粘贴视频分享链接后点【解析下载】"
+                  placeholder="粘贴视频或音乐分享链接后点【解析下载】"
                   prefix={<LinkOutlined style={{ color: '#94a3b8' }} />}
                   suffix={
                     inputUrl ? (
@@ -280,6 +295,11 @@ function App() {
                     粘贴分享链接后点【解析下载】，程序会复制链接并唤起桌面微信；
                     在微信中粘贴发送、打开并播放该视频，视频源会自动补齐到下方列表。
                   </Paragraph>
+                  <Paragraph style={{ margin: '8px 0 0 0' }}>
+                    <b>QQ音乐：</b>
+                    直接解析会优先获取完整音频；若账号未登录或无完整音频权限，则加入官方试听。
+                    点击【打开链接】可在 QQ 音乐窗口登录，登录后重新解析。
+                  </Paragraph>
                 </div>
               }
             />
@@ -289,7 +309,7 @@ function App() {
                 <div className="App-inited-list-title">
                   <VideoCameraOutlined style={{ color: '#4f46e5', marginRight: 8 }} />
                   <Text strong style={{ fontSize: 14 }}>
-                    已捕获视频
+                    已解析媒体
                   </Text>
                 </div>
                 <Space size={8}>

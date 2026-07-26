@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import { get } from 'axios';
-import { downloadFile, getAvailableFilePath } from '../../electron/utils';
+import { downloadFile, getAvailableFilePath, normalizeMediaExtension } from '../../electron/utils';
 
 jest.mock('axios', () => ({
   get: jest.fn(),
@@ -19,6 +19,19 @@ describe('download file paths', () => {
 
     expect(getAvailableFilePath(directory, '视频')).toBe(path.join(directory, '视频 (2).mp4'));
     expect(fs.readFileSync(first, 'utf8')).toBe('first');
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  test('uses a supported audio extension when reserving file names', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'webscoop-'));
+    const first = path.join(directory, '歌曲.m4a');
+    fs.writeFileSync(first, 'first');
+
+    expect(getAvailableFilePath(directory, '歌曲', '.m4a')).toBe(
+      path.join(directory, '歌曲 (1).m4a'),
+    );
+    expect(normalizeMediaExtension('m4a')).toBe('.m4a');
+    expect(normalizeMediaExtension('.exe')).toBe('.mp4');
     fs.rmSync(directory, { recursive: true, force: true });
   });
 

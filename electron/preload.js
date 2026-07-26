@@ -20,6 +20,7 @@ const INVOKE_CHANNELS = new Set([
   'invoke_打开日志目录',
   'invoke_打开视频目录',
   'invoke_打开外部链接',
+  'invoke_打开QQ音乐',
   'invoke_打开已下载文件',
 ]);
 

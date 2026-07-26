@@ -16,6 +16,7 @@ export default createMachine(
       description: '',
       noDecrypt: false,
       referer: '',
+      extension: '',
       downloadQueue: [],
       // 证书已装未信任时记住完整 CN，避免重试自动信任时 UI 闪回「首次初始化」页
       certCommonName: '',
@@ -220,6 +221,8 @@ export default createMachine(
             platform,
             referer,
             noDecrypt,
+            extension,
+            isPreview,
             coverUrl,
             shareUrl,
             infoOnly,
@@ -235,6 +238,8 @@ export default createMachine(
             platform,
             referer,
             noDecrypt,
+            extension,
+            isPreview,
             coverUrl,
             shareUrl,
             infoOnly,
@@ -270,7 +275,7 @@ export default createMachine(
           .catch(() => send('e_取消'));
       },
       invoke_下载视频:
-        ({ currentUrl, savePath, decodeKey, description, noDecrypt, referer }) =>
+        ({ currentUrl, savePath, decodeKey, description, noDecrypt, referer, extension }) =>
         (send) => {
           let completed = false;
           electronAPI
@@ -281,6 +286,7 @@ export default createMachine(
               description,
               noDecrypt,
               referer,
+              extension,
             })
             .then((result) => {
               if (completed) return;
@@ -331,6 +337,8 @@ export default createMachine(
             platform,
             referer,
             noDecrypt,
+            extension,
+            isPreview,
             coverUrl,
             shareUrl,
             infoOnly,
@@ -356,6 +364,8 @@ export default createMachine(
             platform: platform || '',
             referer: referer || '',
             noDecrypt: !!noDecrypt,
+            extension: extension || '',
+            isPreview: !!isPreview,
             coverUrl: coverUrl || '',
             shareUrl: shareUrl || '',
             infoOnly: !!infoOnly,
@@ -405,8 +415,10 @@ export default createMachine(
               !isGenericWechatTitle(newItem.description) &&
               isGenericWechatTitle(existing.description);
             const gainedRealUrl = existing.infoOnly && newItem.url;
+            const upgradedFromPreview = existing.isPreview && !newItem.isPreview;
             const shouldUpdate =
               gainedRealUrl ||
+              upgradedFromPreview ||
               (hdUrl && !existing.hdUrl) ||
               (newItem.decodeKey && !existing.decodeKey) ||
               shouldUpdateTitle ||
@@ -425,11 +437,17 @@ export default createMachine(
                 : existing.prettySize,
               url: newItem.url || existing.url,
               decodeKey: newItem.decodeKey || existing.decodeKey,
-              description: shouldUpdateTitle ? newItem.description : existing.description,
+              description:
+                shouldUpdateTitle || upgradedFromPreview
+                  ? newItem.description
+                  : existing.description,
               uploader: newItem.uploader || existing.uploader,
               platform: newItem.platform || existing.platform,
               referer: newItem.referer || existing.referer,
               noDecrypt: newItem.url ? newItem.noDecrypt : existing.noDecrypt,
+              extension: newItem.extension || existing.extension,
+              isPreview: newItem.url ? newItem.isPreview : existing.isPreview,
+              fullFileName: upgradedFromPreview ? undefined : existing.fullFileName,
               coverUrl: newItem.coverUrl || existing.coverUrl,
               shareUrl: newItem.shareUrl || existing.shareUrl,
               infoOnly: existing.infoOnly && !newItem.url,
@@ -444,7 +462,7 @@ export default createMachine(
               `已识别视频号元信息: ${platformTag}${newItem.description}（在桌面微信中打开播放后自动补齐视频源）`,
             );
           } else {
-            message.success(`捕获到视频: ${platformTag}${newItem.description}`);
+            message.success(`捕获到媒体: ${platformTag}${newItem.description}`);
           }
           return {
             captureList: [newItem, ...captureList],
@@ -455,19 +473,23 @@ export default createMachine(
         return { captureList: [] };
       }),
       action_设置当前地址: actions.assign(
-        (_, { url, decodeKey, description, noDecrypt, referer }) => {
+        (_, { url, decodeKey, description, noDecrypt, referer, extension }) => {
           return {
             currentUrl: url,
             decodeKey: decodeKey || '',
             description: description || '',
             noDecrypt: !!noDecrypt,
             referer: referer || '',
+            extension: extension || '',
             downloadProgress: 0,
           };
         },
       ),
       action_加入下载队列: actions.assign(
-        ({ currentUrl, downloadQueue }, { url, decodeKey, description, noDecrypt, referer }) => {
+        (
+          { currentUrl, downloadQueue },
+          { url, decodeKey, description, noDecrypt, referer, extension },
+        ) => {
           if (!url) return {};
           const queueItem = {
             url,
@@ -475,26 +497,28 @@ export default createMachine(
             description: description || '',
             noDecrypt: !!noDecrypt,
             referer: referer || '',
+            extension: extension || '',
           };
           const existsInQueue = downloadQueue.some((item) => item.url === queueItem.url);
           if (currentUrl === queueItem.url || existsInQueue) {
-            message.info('该视频已在下载中或队列中');
+            message.info('该媒体已在下载中或队列中');
             return {};
           }
-          message.success(`已加入下载队列: ${queueItem.description || '视频'}`);
+          message.success(`已加入下载队列: ${queueItem.description || '媒体'}`);
           return { downloadQueue: [...downloadQueue, queueItem] };
         },
       ),
       action_设置队列下一条: actions.assign(({ downloadQueue }) => {
         const [nextItem, ...restQueue] = downloadQueue;
         if (!nextItem) return { downloadProgress: 0 };
-        message.info(`开始下载队列下一条: ${nextItem.description || '视频'}`);
+        message.info(`开始下载队列下一条: ${nextItem.description || '媒体'}`);
         return {
           currentUrl: nextItem.url,
           decodeKey: nextItem.decodeKey || '',
           description: nextItem.description || '',
           noDecrypt: !!nextItem.noDecrypt,
           referer: nextItem.referer || '',
+          extension: nextItem.extension || '',
           downloadProgress: 0,
           downloadQueue: restQueue,
         };

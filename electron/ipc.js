@@ -1,23 +1,76 @@
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { ipcMain, dialog, shell, app, clipboard } from 'electron';
+import { ipcMain, dialog, shell, app, clipboard, BrowserWindow, session } from 'electron';
 import log from 'electron-log';
 import { throttle } from 'lodash';
 import axios from 'axios';
 import CONFIG from './const';
 import { startServer, setWechatCaptureTarget, shutdownServer } from './proxyServer';
 import { installCert, checkCertInstalled, CERT_STATUS } from './cert';
-import { downloadFile, getAvailableFilePath } from './utils';
+import { downloadFile, getAvailableFilePath, normalizeMediaExtension } from './utils';
 import { parsePlatformVideo } from './platformParsers';
 import { parseWechatShortLink } from './wechatFinder';
 import { getHistory, addHistoryRecord, clearHistory } from './downloadHistory';
 import { getSettings, updateSettings } from './appSettings';
 
 let win;
+let qqMusicWindow;
 let lastDownloadDir = '';
 const downloadedFiles = new Set();
 // 正在进行的下载：fullFileName -> AbortController，供"取消下载"使用。
 const activeDownloads = new Map();
+
+function parseQqMusicUrl(inputUrl) {
+  const url = new URL(String(inputUrl || ''));
+  const hostname = url.hostname.toLowerCase();
+  const isQqMusicHost =
+    hostname === 'y.qq.com' ||
+    hostname.endsWith('.y.qq.com') ||
+    hostname === 'qqmusic.qq.com' ||
+    hostname.endsWith('.qqmusic.qq.com');
+  if (url.protocol !== 'https:' || !isQqMusicHost) {
+    throw new Error('只允许打开 QQ 音乐 HTTPS 链接');
+  }
+  return url.toString();
+}
+
+async function openQqMusicWindow(inputUrl) {
+  const url = parseQqMusicUrl(inputUrl);
+  if (qqMusicWindow && !qqMusicWindow.isDestroyed()) {
+    await qqMusicWindow.loadURL(url);
+    qqMusicWindow.show();
+    qqMusicWindow.focus();
+    return true;
+  }
+
+  qqMusicWindow = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 900,
+    minHeight: 640,
+    title: 'QQ音乐登录',
+    autoHideMenuBar: true,
+    webPreferences: {
+      session: session.defaultSession,
+      webSecurity: true,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  qqMusicWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (/^https?:\/\//i.test(targetUrl)) shell.openExternal(targetUrl);
+    return { action: 'deny' };
+  });
+  qqMusicWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!/^https?:\/\//i.test(targetUrl)) event.preventDefault();
+  });
+  qqMusicWindow.on('closed', () => {
+    qqMusicWindow = undefined;
+  });
+  await qqMusicWindow.loadURL(url);
+  return true;
+}
 
 // 手动信任兜底：打开「钥匙串访问」应用本身，而不是打开 .pem。
 // 打开 .pem 会弹出多余的「添加证书」框（证书其实早已在钥匙串里），且那里并不能设信任。
@@ -162,14 +215,18 @@ export default function initIPC() {
     'invoke_下载视频',
     async (
       event,
-      { url, decodeKey, savePath, description, noDecrypt, referer, platform, size },
+      { url, decodeKey, savePath, description, noDecrypt, referer, platform, size, extension },
     ) => {
       const fileName =
         String(description || '')
           .replace(/[\\/:*?"<>|]/g, '')
           .trim()
           .slice(0, 160) || String(Date.now());
-      const fullFileName = getAvailableFilePath(savePath, fileName);
+      const fullFileName = getAvailableFilePath(
+        savePath,
+        fileName,
+        normalizeMediaExtension(extension),
+      );
 
       if (savePath) lastDownloadDir = savePath;
 
@@ -248,6 +305,10 @@ export default function initIPC() {
     }
     await shell.openExternal(url.toString());
     return true;
+  });
+
+  ipcMain.handle('invoke_打开QQ音乐', async (_event, inputUrl) => {
+    return openQqMusicWindow(inputUrl);
   });
 
   ipcMain.handle('invoke_打开已下载文件', async (_event, fullFileName) => {

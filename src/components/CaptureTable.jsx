@@ -32,6 +32,13 @@ function TitleCell({ value, record }) {
             </Tag>
           </Tooltip>
         )}
+        {record.isPreview && (
+          <Tooltip title="QQ 音乐官方试听音频；登录后重新解析可尝试获取完整音频">
+            <Tag color="warning" className="hd-tag">
+              试听
+            </Tag>
+          </Tooltip>
+        )}
         {record.infoOnly && (
           <Tooltip title="请在桌面微信中打开并播放该视频，播放后自动补齐视频源">
             <Tag color="warning" icon={<ExclamationCircleOutlined />} className="hd-tag">
@@ -67,7 +74,7 @@ export default function CaptureTable({
     return (
       <div className="App-inited-empty">
         <VideoCameraOutlined className="App-inited-empty-icon" />
-        <div className="App-inited-empty-text">粘贴链接解析，或在浏览器播放视频后自动捕获</div>
+        <div className="App-inited-empty-text">粘贴媒体链接解析，或播放视频后自动捕获</div>
         <div className="App-inited-empty-hint">支持 {supportedPlatformText}</div>
       </div>
     );
@@ -82,6 +89,7 @@ export default function CaptureTable({
       fullFileName,
       noDecrypt,
       referer,
+      extension,
       infoOnly,
       shareUrl,
     } = record;
@@ -150,6 +158,7 @@ export default function CaptureTable({
             description,
             noDecrypt,
             referer,
+            extension,
           });
         }}
         loading={isCurrentDownload}

@@ -11,12 +11,16 @@ export const platformColors = {
   Facebook: '#1877f2',
   Vimeo: '#1ab7ea',
   微博: '#e6162d',
+  QQ音乐: '#31c27c',
 };
 
 export const supportedPlatformText =
-  '视频号、抖音、小红书、快手、B站、YouTube、X、TikTok、Instagram、Facebook、Vimeo、微博';
+  '视频号、抖音、小红书、快手、B站、YouTube、X、TikTok、Instagram、Facebook、Vimeo、微博、QQ音乐';
 
 // 视频号 / finder 链接判定：这类链接走桌面微信路径，其余平台走浏览器/yt-dlp。
 export const WECHAT_URL_REGEX = /(^|\/\/|\.)weixin\.qq\.com|finder\.video\.qq\.com/i;
+
+export const QQ_MUSIC_URL_REGEX =
+  /(^|\/\/)(?:[\w-]+\.)*(?:y\.qq\.com|qqmusic\.qq\.com)(?:[/:?#]|$)/i;
 
 export const CERT_COMMON_NAME_PREFIX = 'WebScoop Local CA';

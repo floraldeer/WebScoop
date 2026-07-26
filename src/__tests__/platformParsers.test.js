@@ -1,10 +1,37 @@
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: {
+    get: jest.fn(),
+    post: jest.fn(),
+  },
+}));
+
+jest.mock('electron', () => ({
+  app: { isPackaged: false },
+  session: {
+    defaultSession: {
+      cookies: {
+        get: jest.fn().mockResolvedValue([]),
+      },
+    },
+  },
+}));
+
+import axios from 'axios';
 import {
+  buildQqMusicAudioUrl,
+  buildQqMusicVkeyPayload,
+  extractQqMusicSongIdentity,
   getMediaSizeFromHeaders,
   parseKuaishouInitialState,
   parsePlatformVideo,
 } from '../../electron/platformParsers';
 
 describe('platform parser media size', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
   test('uses the total length from a range response', () => {
     expect(
       getMediaSizeFromHeaders(
@@ -68,6 +95,205 @@ describe('platform parser media size', () => {
       title: '测试视频',
       size: 5922303,
       uploader: '测试作者',
+    });
+  });
+
+  test('extracts QQ Music songid from playsong links', () => {
+    expect(
+      extractQqMusicSongIdentity(
+        'https://i.y.qq.com/v8/playsong.html?songid=724394&songtype=0#webchat_redirect',
+      ),
+    ).toEqual({
+      songid: '724394',
+      songmid: '',
+      songtype: 0,
+    });
+  });
+
+  test('extracts QQ Music songid from songDetail paths', () => {
+    expect(
+      extractQqMusicSongIdentity(
+        'https://y.qq.com/n/ryqq_v2/songDetail/724394?ADTAG=h5_play_song&songtype=0',
+      ),
+    ).toEqual({
+      songid: '724394',
+      songmid: '',
+      songtype: 0,
+    });
+  });
+
+  test('builds QQ Music audio URL from vkey purl', () => {
+    expect(
+      buildQqMusicAudioUrl({
+        req_0: {
+          data: {
+            sip: ['http://aqqmusic.tc.qq.com/'],
+            midurlinfo: [
+              {
+                purl: 'C400002ucvcB2rA3n4.m4a?guid=1535153710&vkey=abc&uin=0&fromtag=3',
+              },
+            ],
+          },
+        },
+      }),
+    ).toBe(
+      'http://aqqmusic.tc.qq.com/C400002ucvcB2rA3n4.m4a?guid=1535153710&vkey=abc&uin=0&fromtag=3',
+    );
+  });
+
+  test('returns empty QQ Music audio URL when vkey purl is unavailable', () => {
+    expect(
+      buildQqMusicAudioUrl({
+        req_0: {
+          data: {
+            sip: ['http://aqqmusic.tc.qq.com/'],
+            midurlinfo: [{ purl: '', result: 104003 }],
+          },
+        },
+      }),
+    ).toBe('');
+  });
+
+  test('builds current QQ Music vkey payload for the full audio file', () => {
+    expect(
+      buildQqMusicVkeyPayload(
+        {
+          mid: '000t7dhP0tQaSi',
+          type: 0,
+          file: { media_mid: '002ucvcB2rA3n4' },
+        },
+        '',
+        false,
+        'test-guid',
+      ),
+    ).toMatchObject({
+      comm: {
+        ct: 24,
+        cv: 4747474,
+        platform: 'yqq.json',
+        uin: 0,
+      },
+      req_0: {
+        module: 'music.vkey.GetVkey',
+        method: 'UrlGetVkey',
+        param: {
+          guid: 'test-guid',
+          songmid: ['000t7dhP0tQaSi'],
+          songtype: [0],
+          filename: ['C400002ucvcB2rA3n4.m4a'],
+        },
+      },
+    });
+  });
+
+  test('builds current QQ Music vkey payload for the official preview file', () => {
+    expect(
+      buildQqMusicVkeyPayload(
+        {
+          mid: '000t7dhP0tQaSi',
+          type: 0,
+          file: { media_mid: '002ucvcB2rA3n4' },
+        },
+        '',
+        true,
+        'preview-guid',
+      ).req_0.param,
+    ).toMatchObject({
+      guid: 'preview-guid',
+      filename: ['RS02002ucvcB2rA3n4.mp3'],
+    });
+  });
+
+  test('uses QQ Music login cookies in the vkey payload', () => {
+    const payload = buildQqMusicVkeyPayload(
+      {
+        mid: '000t7dhP0tQaSi',
+        type: 0,
+        file: { media_mid: '002ucvcB2rA3n4' },
+      },
+      'uin=o123456; qm_keyst=Q_H_L_test',
+      false,
+      'login-guid',
+    );
+
+    expect(payload.comm).toMatchObject({
+      uin: 123456,
+      g_tk: 1926538631,
+      g_tk_new_20200303: 1926538631,
+    });
+    expect(payload.req_0.param.uin).toBe('123456');
+  });
+
+  test('falls back to a labeled QQ Music preview when full audio is unauthorized', async () => {
+    axios.get
+      .mockResolvedValueOnce({
+        data: {
+          code: 0,
+          data: [
+            {
+              mid: '000t7dhP0tQaSi',
+              type: 0,
+              title: '爱情买卖',
+              singer: [{ name: '慕容晓晓' }],
+              file: {
+                media_mid: '002ucvcB2rA3n4',
+                size_try: 960887,
+              },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { destroy: jest.fn() },
+        headers: {
+          'content-type': 'audio/mpeg',
+          'content-range': 'bytes 0-1/960887',
+        },
+        status: 206,
+        request: {
+          res: {
+            responseUrl: 'https://isure.stream.qqmusic.qq.com/RS02002ucvcB2rA3n4.mp3?vkey=preview',
+          },
+        },
+      });
+    axios.post
+      .mockResolvedValueOnce({
+        data: {
+          req_0: {
+            data: {
+              midurlinfo: [{ filename: 'C400002ucvcB2rA3n4.m4a', purl: '', result: 104003 }],
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          req_0: {
+            data: {
+              sip: ['https://isure.stream.qqmusic.qq.com/'],
+              midurlinfo: [
+                {
+                  filename: 'RS02002ucvcB2rA3n4.mp3',
+                  purl: 'RS02002ucvcB2rA3n4.mp3?vkey=preview',
+                  result: 0,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+    await expect(
+      parsePlatformVideo(
+        'https://i.y.qq.com/v8/playsong.html?songid=724394&songtype=0#webchat_redirect',
+      ),
+    ).resolves.toMatchObject({
+      url: 'https://isure.stream.qqmusic.qq.com/RS02002ucvcB2rA3n4.mp3?vkey=preview',
+      description: '【试听】爱情买卖 - 慕容晓晓',
+      platform: 'QQ音乐',
+      extension: '.mp3',
+      isPreview: true,
+      size: 960887,
     });
   });
 });
