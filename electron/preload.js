@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 const INVOKE_CHANNELS = new Set([
+  'invoke_读取剪贴板',
   'invoke_初始化信息',
   'invoke_开始初始化',
   'invoke_打开钥匙串信任引导',

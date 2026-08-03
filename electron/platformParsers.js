@@ -12,6 +12,30 @@ const DEFAULT_HEADERS = {
   'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
 };
 
+function toPositiveInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+}
+
+function getResolutionTier(edge) {
+  if (edge >= 2160) return '4K';
+  if (edge >= 1440) return '2K';
+  if (edge >= 1080) return '1080p';
+  if (edge >= 720) return '720p';
+  return edge > 0 ? `${edge}p` : '';
+}
+
+export function formatVideoResolution({ width, height } = {}) {
+  const normalizedWidth = toPositiveInteger(width);
+  const normalizedHeight = toPositiveInteger(height);
+  if (normalizedWidth && normalizedHeight) {
+    const tier = getResolutionTier(Math.min(normalizedWidth, normalizedHeight));
+    return `${normalizedWidth}×${normalizedHeight}${tier ? ` · ${tier}` : ''}`;
+  }
+  if (normalizedHeight) return getResolutionTier(normalizedHeight);
+  return '';
+}
+
 export const PLATFORM_CONFIGS = [
   {
     platform: '小红书',
@@ -396,7 +420,12 @@ export function parseKuaishouInitialState(html, resolvedUrl) {
     const fallbackRepresentation = representations
       .filter((item) => Number(item?.fileSize) > 0)
       .sort((a, b) => Number(b.fileSize) - Number(a.fileSize))[0];
+    const selectedRepresentation = matchedRepresentation || fallbackRepresentation;
 
+    const resolution = formatVideoResolution({
+      width: selectedRepresentation?.width,
+      height: selectedRepresentation?.height,
+    });
     return {
       videoUrl,
       title:
@@ -405,8 +434,9 @@ export function parseKuaishouInitialState(html, resolvedUrl) {
           .replace(/[-—]\s?快手$/i, '')
           .trim()
           .slice(0, 80) || '快手视频',
-      size: Number(matchedRepresentation?.fileSize || fallbackRepresentation?.fileSize) || 0,
+      size: Number(selectedRepresentation?.fileSize) || 0,
       uploader: extractAuthor(decoded) || photo.userName || '',
+      ...(resolution ? { resolution } : {}),
     };
   } catch (e) {
     return null;
@@ -541,9 +571,22 @@ async function parseBilibili(inputUrl) {
   const playData = playResp.data.data;
   let videoUrl = '';
   let filesize = 0;
+  let resolution = '';
   if (Array.isArray(playData.durl) && playData.durl.length) {
     videoUrl = playData.durl[0].url || playData.durl[0].backup_url?.[0] || '';
     filesize = playData.durl[0].size || 0;
+    resolution =
+      {
+        127: '8K',
+        120: '4K',
+        116: '1080p60',
+        112: '1080p+',
+        80: '1080p',
+        74: '720p60',
+        64: '720p',
+        32: '480p',
+        16: '360p',
+      }[playData.quality] || '';
   } else if (playData.dash?.video?.length) {
     // dash 是分离的 video+audio；只拿视频轨会没声音；用 durl 更靠谱
     // 兜底：挑最高清晰度的 video baseUrl
@@ -551,6 +594,7 @@ async function parseBilibili(inputUrl) {
       (a, b) => (b.bandwidth || 0) - (a.bandwidth || 0),
     )[0];
     videoUrl = bestVideo.baseUrl || bestVideo.base_url || '';
+    resolution = formatVideoResolution(bestVideo);
   }
   if (!videoUrl) {
     throw new Error(
@@ -569,6 +613,7 @@ async function parseBilibili(inputUrl) {
     referer: 'https://www.bilibili.com/',
     noDecrypt: true,
     sourceUrl: pageUrl,
+    resolution,
   };
 }
 
@@ -893,6 +938,22 @@ function selectYtDlpUrl(info) {
   return candidates[0]?.url || info?.url || '';
 }
 
+function getYtDlpResolution(info, videoUrl) {
+  const requestedDownloads = Array.isArray(info?.requested_downloads)
+    ? info.requested_downloads
+    : [];
+  const formats = Array.isArray(info?.formats) ? info.formats : [];
+  const selected =
+    requestedDownloads.find((item) => item?.url === videoUrl) ||
+    formats.find((item) => item?.url === videoUrl) ||
+    requestedDownloads[0] ||
+    null;
+  return formatVideoResolution({
+    width: info?.width || selected?.width,
+    height: info?.height || selected?.height,
+  });
+}
+
 function buildYtDlpError(platform, err) {
   const text = String(err?.stderr || err?.message || err || '');
   if (/unsupported version of Python|Python versions 3\.10/i.test(text)) {
@@ -1015,6 +1076,7 @@ async function parseWithYtDlp(url, platform, cookie) {
         referer: info?.webpage_url || url,
         noDecrypt: true,
         sourceUrl: info?.webpage_url || url,
+        resolution: getYtDlpResolution(info, videoUrl),
       };
     } catch (err) {
       lastErr = err;
@@ -1110,7 +1172,10 @@ export async function parsePlatformVideo(inputUrl) {
     }
   }
   if (platform === '快手') {
-    const { videoUrl, title, size, uploader } = parseKuaishou(page.html, page.resolvedUrl);
+    const { videoUrl, title, size, uploader, resolution } = parseKuaishou(
+      page.html,
+      page.resolvedUrl,
+    );
     if (videoUrl) {
       const mediaInfo = size ? { size } : await inspectVideoUrl(videoUrl, page.resolvedUrl);
       return {
@@ -1124,6 +1189,7 @@ export async function parsePlatformVideo(inputUrl) {
         referer: page.resolvedUrl,
         noDecrypt: true,
         sourceUrl: page.resolvedUrl,
+        resolution,
       };
     }
   }

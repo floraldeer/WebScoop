@@ -10,11 +10,13 @@ import {
   FolderOpenOutlined,
 } from '@ant-design/icons';
 import { platformColors, supportedPlatformText } from '../constants';
+import { getMediaSourceQuality, getPreferredMediaUrl } from '../mediaSource';
 
 const { Text } = Typography;
 const electronAPI = window.webscoop;
 
 function TitleCell({ value, record }) {
+  const sourceQuality = getMediaSourceQuality(record);
   return (
     <div className="video-item-title">
       <div className="video-item-name">
@@ -26,10 +28,24 @@ function TitleCell({ value, record }) {
         <Text ellipsis={{ tooltip: value }} style={{ fontSize: 13, flex: 1 }}>
           {value}
         </Text>
-        {record.hdUrl && (
-          <Tooltip title="高清版本">
+        {sourceQuality === 'hd' && (
+          <Tooltip title="已捕获独立高清源，下载将优先使用该源">
             <Tag color="success" icon={<StarOutlined />} className="hd-tag">
-              HD
+              高清源
+            </Tag>
+          </Tooltip>
+        )}
+        {sourceQuality === 'best_available' && (
+          <Tooltip title="接口仅返回一个可下载源，当前已选择最高可用源">
+            <Tag color="processing" className="hd-tag">
+              最高可用
+            </Tag>
+          </Tooltip>
+        )}
+        {record.resolution && (
+          <Tooltip title={`视频清晰度：${record.resolution}`}>
+            <Tag color="processing" className="hd-tag">
+              {record.resolution}
             </Tag>
           </Tooltip>
         )}
@@ -93,9 +109,7 @@ export default function CaptureTable({
 
   const renderAction = (_, record) => {
     const {
-      url,
       decodeKey,
-      hdUrl,
       description,
       fullFileName,
       noDecrypt,
@@ -104,7 +118,9 @@ export default function CaptureTable({
       infoOnly,
       shareUrl,
     } = record;
-    const downloadUrl = hdUrl || url;
+    const sourceQuality = getMediaSourceQuality(record);
+    const hasHdSource = sourceQuality === 'hd';
+    const downloadUrl = getPreferredMediaUrl(record);
     const isCurrentDownload = isDownloading && currentUrl === downloadUrl;
     const isQueued = downloadQueue.some((item) => item.url === downloadUrl);
 
@@ -192,7 +208,13 @@ export default function CaptureTable({
         size="small"
         className="download-btn"
       >
-        {isQueued ? '排队中' : '下载'}
+        {isQueued
+          ? '排队中'
+          : hasHdSource
+          ? '下载高清'
+          : sourceQuality === 'best_available'
+          ? '下载最高可用'
+          : '下载'}
       </Button>
     );
   };
@@ -202,7 +224,7 @@ export default function CaptureTable({
       size="middle"
       dataSource={captureList}
       rowKey={(record) =>
-        (record.hdUrl || record.url || record.shareUrl || record.description) +
+        (getPreferredMediaUrl(record) || record.shareUrl || record.description) +
         '|' +
         (record.decodeKey || '')
       }

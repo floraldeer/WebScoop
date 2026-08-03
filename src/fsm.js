@@ -3,6 +3,7 @@ import prettyBytes from 'pretty-bytes';
 import { message } from 'antd';
 
 const electronAPI = window.webscoop;
+const MAX_CAPTURE_ITEMS = 500;
 
 export default createMachine(
   {
@@ -223,6 +224,8 @@ export default createMachine(
             noDecrypt,
             extension,
             quality,
+            resolution,
+            source_quality,
             isPreview,
             coverUrl,
             shareUrl,
@@ -241,6 +244,8 @@ export default createMachine(
             noDecrypt,
             extension,
             quality,
+            resolution,
+            sourceQuality: source_quality,
             isPreview,
             coverUrl,
             shareUrl,
@@ -341,6 +346,8 @@ export default createMachine(
             noDecrypt,
             extension,
             quality,
+            resolution,
+            sourceQuality,
             isPreview,
             coverUrl,
             shareUrl,
@@ -369,6 +376,8 @@ export default createMachine(
             noDecrypt: !!noDecrypt,
             extension: extension || '',
             quality: quality || '',
+            resolution: resolution || '',
+            sourceQuality: sourceQuality || '',
             isPreview: !!isPreview,
             coverUrl: coverUrl || '',
             shareUrl: shareUrl || '',
@@ -424,6 +433,7 @@ export default createMachine(
               gainedRealUrl ||
               upgradedFromPreview ||
               (hdUrl && !existing.hdUrl) ||
+              (newItem.sourceQuality === 'hd' && existing.sourceQuality !== 'hd') ||
               (newItem.decodeKey && !existing.decodeKey) ||
               shouldUpdateTitle ||
               (newItem.uploader && !existing.uploader) ||
@@ -451,6 +461,11 @@ export default createMachine(
               noDecrypt: newItem.url ? newItem.noDecrypt : existing.noDecrypt,
               extension: newItem.extension || existing.extension,
               quality: newItem.quality || existing.quality,
+              resolution: newItem.resolution || existing.resolution,
+              sourceQuality:
+                existing.sourceQuality === 'hd' || newItem.sourceQuality === 'hd'
+                  ? 'hd'
+                  : newItem.sourceQuality || existing.sourceQuality,
               isPreview: newItem.url ? newItem.isPreview : existing.isPreview,
               fullFileName: upgradedFromPreview ? undefined : existing.fullFileName,
               coverUrl: newItem.coverUrl || existing.coverUrl,
@@ -470,7 +485,7 @@ export default createMachine(
             message.success(`捕获到媒体: ${platformTag}${newItem.description}`);
           }
           return {
-            captureList: [newItem, ...captureList],
+            captureList: [newItem, ...captureList].slice(0, MAX_CAPTURE_ITEMS),
           };
         },
       ),

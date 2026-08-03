@@ -5,9 +5,12 @@ import isDev from 'electron-is-dev';
 // 必须用命名导入拿 autoUpdater。
 import { autoUpdater } from 'electron-updater';
 
+let initialized = false;
+
 // 使用 electron-updater 做真正的自动更新（下载 + 退出时安装）。
 // 需要 electron-builder 打包时生成 latest.yml / latest-mac.yml 并随 Release 发布。
 export function initAutoUpdater() {
+  if (initialized) return;
   if (isDev) {
     log.info('[updater] skipped in dev');
     return;
@@ -16,6 +19,7 @@ export function initAutoUpdater() {
     log.info('[updater] autoUpdater unavailable, skipped');
     return;
   }
+  initialized = true;
 
   autoUpdater.logger = log;
   autoUpdater.autoDownload = true;

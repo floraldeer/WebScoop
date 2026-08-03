@@ -6,7 +6,7 @@ import log from 'electron-log';
 import { throttle } from 'lodash';
 import axios from 'axios';
 import CONFIG from './const';
-import { startServer, setWechatCaptureTarget, shutdownServer } from './proxyServer';
+import { setProxyWindow, startServer, setWechatCaptureTarget, shutdownServer } from './proxyServer';
 import { installCert, checkCertInstalled, CERT_STATUS } from './cert';
 import {
   downloadFile,
@@ -24,8 +24,17 @@ let win;
 let qqMusicWindow;
 let lastDownloadDir = '';
 const downloadedFiles = new Set();
+const MAX_TRACKED_DOWNLOADED_FILES = 500;
 // 正在进行的下载：fullFileName -> AbortController，供"取消下载"使用。
 const activeDownloads = new Map();
+
+function rememberDownloadedFile(fullFileName) {
+  downloadedFiles.delete(fullFileName);
+  downloadedFiles.add(fullFileName);
+  while (downloadedFiles.size > MAX_TRACKED_DOWNLOADED_FILES) {
+    downloadedFiles.delete(downloadedFiles.values().next().value);
+  }
+}
 
 async function openQqMusicWindow(inputUrl) {
   const url = parseQqMusicUrl(inputUrl);
@@ -92,6 +101,8 @@ function openKeychainAccess() {
 }
 
 export default function initIPC() {
+  ipcMain.handle('invoke_读取剪贴板', async () => clipboard.readText());
+
   ipcMain.handle('invoke_初始化信息', async (event, arg) => {
     return await checkCertInstalled();
   });
@@ -267,7 +278,7 @@ export default function initIPC() {
         { noDecrypt, referer, signal: controller.signal },
       )
         .then((result) => {
-          downloadedFiles.add(result.fullFileName);
+          rememberDownloadedFile(result.fullFileName);
           addHistoryRecord({ fullFileName: result.fullFileName, description, platform, size, url });
           return result;
         })
@@ -301,7 +312,7 @@ export default function initIPC() {
 
   // 清理证书与本地缓存：先恢复系统代理并停代理，再删除本机 CA 目录。
   ipcMain.handle('invoke_清理证书与缓存', async () => {
-    await shutdownServer().catch(() => {});
+    await shutdownServer();
     await fs.promises.rm(CONFIG.CERT_PATH, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(CONFIG.INSTALL_CERT_FLAG, { force: true }).catch(() => {});
     log.info('[maintenance] cert & cache cleared');
@@ -357,4 +368,5 @@ export default function initIPC() {
 
 export function setWin(w) {
   win = w;
+  setProxyWindow(w);
 }

@@ -24,3 +24,15 @@ export const QQ_MUSIC_URL_REGEX =
   /(^|\/\/)(?:[\w-]+\.)*(?:y\.qq\.com|qqmusic\.qq\.com)(?:[/:?#]|$)/i;
 
 export const CERT_COMMON_NAME_PREFIX = 'WebScoop Local CA';
+
+export function extractFirstHttpUrl(text = '') {
+  const match = String(text).match(/https?:\/\/[^\s<>"']+/i);
+  if (!match) return '';
+  const candidate = match[0].replace(/[),.;!?，。；！？）\]}]+$/, '');
+  try {
+    const url = new URL(candidate);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '';
+  } catch {
+    return '';
+  }
+}

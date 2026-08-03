@@ -3,6 +3,7 @@ import {
   isVideoRequest,
   buildFullUrl,
   injectScriptToHtml,
+  selectWechatMediaSource,
   walkFeedMedia,
 } from '../../electron/proxy/mediaMatchers';
 
@@ -93,5 +94,99 @@ describe('walkFeedMedia', () => {
   test('skips media without decode_key', () => {
     const json = { media: [{ url: 'https://cdn/x' }] };
     expect(walkFeedMedia(json)).toHaveLength(0);
+  });
+});
+
+describe('selectWechatMediaSource', () => {
+  test('selects the largest distinct spec video as HD', () => {
+    expect(
+      selectWechatMediaSource({
+        url: 'https://cdn/normal',
+        url_token: '?normal=1',
+        file_size: 100,
+        spec_video: [
+          { url: 'https://cdn/medium', url_token: '?medium=1', file_size: 200 },
+          { url: 'https://cdn/hd', url_token: '?hd=1', file_size: 500 },
+        ],
+      }),
+    ).toEqual({
+      url: 'https://cdn/normal?normal=1',
+      hd_url: 'https://cdn/hd?hd=1',
+      size: 500,
+      source_quality: 'hd',
+    });
+  });
+
+  test('marks a single source as highest available', () => {
+    expect(
+      selectWechatMediaSource({
+        url: 'https://cdn/only',
+        url_token: '?token=1',
+        file_size: 300,
+      }),
+    ).toEqual({
+      url: 'https://cdn/only?token=1',
+      hd_url: null,
+      size: 300,
+      source_quality: 'best_available',
+    });
+  });
+
+  test('recognizes an explicit distinct HD source', () => {
+    expect(
+      selectWechatMediaSource({
+        url: 'https://cdn/normal',
+        hd_url: 'https://cdn/hd',
+        file_size: 100,
+        hd_file_size: 400,
+      }),
+    ).toEqual({
+      url: 'https://cdn/normal',
+      hd_url: 'https://cdn/hd',
+      size: 400,
+      source_quality: 'hd',
+    });
+  });
+
+  test('does not mark a duplicate HD URL as independent', () => {
+    expect(
+      selectWechatMediaSource({
+        url: 'https://cdn/video',
+        hd_url: 'https://cdn/video',
+        file_size: 100,
+      }),
+    ).toMatchObject({
+      hd_url: null,
+      source_quality: 'best_available',
+    });
+  });
+
+  test('does not replace a larger base source with a smaller variant', () => {
+    expect(
+      selectWechatMediaSource({
+        url: 'https://cdn/base',
+        file_size: 1000,
+        spec_video: [{ url: 'https://cdn/smaller', file_size: 500 }],
+      }),
+    ).toEqual({
+      url: 'https://cdn/base',
+      hd_url: null,
+      size: 1000,
+      source_quality: 'best_available',
+    });
+  });
+
+  test('ignores malformed non-array variants', () => {
+    expect(
+      selectWechatMediaSource({
+        url: 'https://cdn/base',
+        file_size: 100,
+        spec_video: { url: 'https://cdn/not-an-array', file_size: 500 },
+      }),
+    ).toMatchObject({
+      url: 'https://cdn/base',
+      hd_url: null,
+      source_quality: 'best_available',
+    });
   });
 });

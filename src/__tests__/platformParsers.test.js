@@ -22,11 +22,25 @@ import {
   buildQqMusicAudioUrl,
   buildQqMusicVkeyPayload,
   extractQqMusicSongIdentity,
+  formatVideoResolution,
   getMediaSizeFromHeaders,
   parseKuaishouInitialState,
   parsePlatformVideo,
   selectQqMusicAudio,
 } from '../../electron/platformParsers';
+
+describe('video resolution formatting', () => {
+  test.each([
+    [{ width: 1920, height: 1080 }, '1920×1080 · 1080p'],
+    [{ width: 1080, height: 1920 }, '1080×1920 · 1080p'],
+    [{ width: 3840, height: 2160 }, '3840×2160 · 4K'],
+    [{ width: 2560, height: 1440 }, '2560×1440 · 2K'],
+    [{ height: 720 }, '720p'],
+    [{}, ''],
+  ])('formats %p as %s', (input, expected) => {
+    expect(formatVideoResolution(input)).toBe(expected);
+  });
+});
 
 describe('platform parser media size', () => {
   afterEach(() => {

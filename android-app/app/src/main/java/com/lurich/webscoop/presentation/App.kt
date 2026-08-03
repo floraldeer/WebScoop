@@ -1,5 +1,8 @@
 package com.lurich.webscoop.presentation
 
+import android.content.ClipboardManager
+import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +19,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
@@ -23,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -35,6 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lurich.webscoop.domain.link.LinkParseResult
@@ -61,6 +67,7 @@ fun WebScoopApp(
     cookieStore: WebViewCookieStore,
     downloader: MediaDownloader,
 ) {
+    val context = LocalContext.current
     val incomingText by sharedText.collectAsState()
     val queueFlow = remember(downloader) { downloader.observeQueue() }
     val queueItems by queueFlow.collectAsState(initial = emptyList())
@@ -85,6 +92,25 @@ fun WebScoopApp(
         }.getOrElse { error ->
             error.message?.take(160) ?: "加入下载队列失败"
         }
+    }
+
+    fun pasteClipboard() {
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        val text = clipboard
+            ?.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(context)
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        if (text.isBlank() || SharedLinkParser.parse(text) is LinkParseResult.Unsupported) {
+            Toast.makeText(context, "剪贴板中没有可用的媒体链接", Toast.LENGTH_SHORT).show()
+            return
+        }
+        input = text
+        parseResult = null
+        downloadMessage = ""
     }
 
     LaunchedEffect(incomingText) {
@@ -155,6 +181,11 @@ fun WebScoopApp(
                             minLines = 3,
                             label = { Text("链接或分享文案") },
                             placeholder = { Text("https://...") },
+                            trailingIcon = {
+                                TextButton(onClick = ::pasteClipboard) {
+                                    Text("粘贴")
+                                }
+                            },
                             supportingText = {
                                 when (linkResult) {
                                     is LinkParseResult.Supported ->
@@ -209,7 +240,7 @@ fun WebScoopApp(
                                 enabled = input.isNotEmpty(),
                                 colors = ButtonDefaults.outlinedButtonColors(),
                             ) {
-                                Text("清空")
+                                Text("清空输入")
                             }
                         }
                         if (linkResult is LinkParseResult.Supported) {
@@ -241,6 +272,7 @@ fun WebScoopApp(
                 DownloadQueueSection(
                     items = queueItems,
                     onCancel = downloader::cancel,
+                    onClear = downloader::clearQueueItems,
                     onOpenDownloads = downloader::openDownloads,
                 )
             }
@@ -287,8 +319,25 @@ fun WebScoopApp(
 private fun DownloadQueueSection(
     items: List<DownloadQueueItem>,
     onCancel: (Long) -> Boolean,
+    onClear: suspend (Collection<DownloadQueueItem>) -> Int,
     onOpenDownloads: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isManaging by remember { mutableStateOf(false) }
+    var selectedDownloadIDs by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var isClearing by remember { mutableStateOf(false) }
+    var pendingClearItems by remember {
+        mutableStateOf<List<DownloadQueueItem>?>(null)
+    }
+
+    LaunchedEffect(items.map(DownloadQueueItem::downloadID)) {
+        selectedDownloadIDs = selectedDownloadIDs.intersect(
+            items.map(DownloadQueueItem::downloadID).toSet(),
+        )
+        if (items.isEmpty()) isManaging = false
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -308,9 +357,82 @@ private fun DownloadQueueSection(
         if (items.isEmpty()) {
             Text("暂无下载任务", color = MaterialTheme.colorScheme.secondary)
         } else {
-            items.forEach { item ->
-                Card(
+            if (isManaging) {
+                Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "已选择 ${selectedDownloadIDs.size} 项",
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            selectedDownloadIDs = if (selectedDownloadIDs.size == items.size) {
+                                emptySet()
+                            } else {
+                                items.map(DownloadQueueItem::downloadID).toSet()
+                            }
+                        },
+                    ) {
+                        Text(if (selectedDownloadIDs.size == items.size) "取消全选" else "全选")
+                    }
+                    TextButton(
+                        onClick = {
+                            isManaging = false
+                            selectedDownloadIDs = emptySet()
+                        },
+                    ) {
+                        Text("完成")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            pendingClearItems = items.filter {
+                                it.downloadID in selectedDownloadIDs
+                            }
+                        },
+                        enabled = selectedDownloadIDs.isNotEmpty(),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("清理所选")
+                    }
+                    Button(
+                        onClick = { pendingClearItems = items },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                        ),
+                    ) {
+                        Text("清理全部")
+                    }
+                }
+            } else {
+                Button(
+                    onClick = { isManaging = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(),
+                ) {
+                    Text("管理下载列表")
+                }
+            }
+            items.forEach { item ->
+                val isSelected = item.downloadID in selectedDownloadIDs
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = isManaging) {
+                            selectedDownloadIDs = if (isSelected) {
+                                selectedDownloadIDs - item.downloadID
+                            } else {
+                                selectedDownloadIDs + item.downloadID
+                            }
+                        },
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface,
                     ),
@@ -319,7 +441,27 @@ private fun DownloadQueueSection(
                         modifier = Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(item.title.ifBlank { "下载任务 ${item.downloadID}" })
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (isManaging) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        selectedDownloadIDs = if (checked) {
+                                            selectedDownloadIDs + item.downloadID
+                                        } else {
+                                            selectedDownloadIDs - item.downloadID
+                                        }
+                                    },
+                                )
+                            }
+                            Text(
+                                item.title.ifBlank { "下载任务 ${item.downloadID}" },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                         Text(
                             item.status.displayText(item.reason),
                             color = if (item.status == DownloadQueueStatus.FAILED) {
@@ -342,14 +484,17 @@ private fun DownloadQueueSection(
                         } else if (item.isActive) {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
-                        if (item.isActive) {
+                        if (!isManaging && item.isActive) {
                             Button(
                                 onClick = { onCancel(item.downloadID) },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Text("取消下载")
                             }
-                        } else if (item.status == DownloadQueueStatus.COMPLETED) {
+                        } else if (
+                            !isManaging &&
+                            item.status == DownloadQueueStatus.COMPLETED
+                        ) {
                             Button(
                                 onClick = onOpenDownloads,
                                 modifier = Modifier.fillMaxWidth(),
@@ -361,6 +506,74 @@ private fun DownloadQueueSection(
                 }
             }
         }
+    }
+
+    pendingClearItems?.let { pendingItems ->
+        val activeCount = pendingItems.count(DownloadQueueItem::isActive)
+        AlertDialog(
+            onDismissRequest = {
+                if (!isClearing) pendingClearItems = null
+            },
+            title = { Text("清理下载列表") },
+            text = {
+                Text(
+                    buildString {
+                        append("将清理 ${pendingItems.size} 条下载记录。")
+                        if (activeCount > 0) {
+                            append("其中 $activeCount 个进行中的任务会被取消。")
+                        }
+                        append("清理前已完成的媒体文件会保留在 Downloads/WebScoop。")
+                        if (activeCount > 0) {
+                            append("任务若在确认清理时刚好完成，系统可能同时移除其文件。")
+                        }
+                    },
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        isClearing = true
+                        scope.launch {
+                            val clearedCount = runCatching { onClear(pendingItems) }
+                                .getOrElse {
+                                    Toast.makeText(
+                                        context,
+                                        "清理失败，请稍后重试",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    isClearing = false
+                                    return@launch
+                                }
+                            pendingClearItems = null
+                            selectedDownloadIDs = emptySet()
+                            isManaging = false
+                            isClearing = false
+                            val failedCount = pendingItems.size - clearedCount
+                            Toast.makeText(
+                                context,
+                                if (failedCount == 0) {
+                                    "已清理 $clearedCount 条下载记录"
+                                } else {
+                                    "已清理 $clearedCount 条，$failedCount 条活动任务取消失败"
+                                },
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    },
+                    enabled = !isClearing,
+                ) {
+                    Text(if (isClearing) "正在清理…" else "确认清理")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingClearItems = null },
+                    enabled = !isClearing,
+                ) {
+                    Text("取消")
+                }
+            },
+        )
     }
 }
 

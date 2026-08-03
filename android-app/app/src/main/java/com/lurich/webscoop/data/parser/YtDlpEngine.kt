@@ -3,6 +3,8 @@ package com.lurich.webscoop.data.parser
 data class YtDlpCommand(
     val url: String,
     val options: List<Pair<String, String?>>,
+    val cookieHeader: String = "",
+    val cookieDomain: String = "",
 )
 
 data class YtDlpVideo(

@@ -2,7 +2,7 @@ import fs from 'fs';
 import hoxy from 'hoxy';
 import getPort from 'get-port';
 import log from 'electron-log';
-import { app } from 'electron';
+import { app, dialog } from 'electron';
 import CONFIG from './const';
 import { setProxy, closeProxy } from './setProxy';
 import { createWechatCaptureCoordinator } from './wechatCaptureCoordinator';
@@ -18,6 +18,9 @@ import {
   walkFeedMedia,
 } from './proxy/mediaMatchers';
 import { WVDS_INJECT_SCRIPT, injection_html } from './inject/wvdsInjectScript';
+
+const SERVER_CLOSE_TIMEOUT_MILLIS = 2_000;
+const PROXY_RESTORE_RETRY_DELAY_MILLIS = 500;
 
 if (process.platform === 'win32') {
   process.env.OPENSSL_BIN = CONFIG.OPEN_SSL_BIN_PATH;
@@ -66,21 +69,38 @@ export function setWechatCaptureTarget(target) {
     currentWechatCaptureCoordinator.setTarget(pendingWechatCaptureTarget);
 }
 
+export function setProxyWindow(win) {
+  currentWin = win;
+}
+
 function closeHoxyProxy(proxy) {
   const close = (server) =>
     new Promise((resolve) => {
       if (!server?.listening) return resolve();
-      try {
-        server.close(() => resolve());
-      } catch (e) {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
         resolve();
+      };
+      const timeout = setTimeout(() => {
+        try {
+          server.closeAllConnections?.();
+        } catch (e) {}
+        finish();
+      }, SERVER_CLOSE_TIMEOUT_MILLIS);
+      try {
+        server.close(finish);
+      } catch (e) {
+        finish();
       }
     });
   return Promise.all([close(proxy?._server), close(proxy?._tlsSpoofingServer)]);
 }
 
 export async function shutdownServer() {
-  await closeProxy().catch(() => {});
+  await closeProxy();
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;
   const proxy = currentProxy;
@@ -181,6 +201,7 @@ async function createProxyServer({ setProxyErrorCallback }) {
           size: data.size || 0,
           description: data.description || '微信视频号视频',
           hd_url: data.hd_url || null,
+          source_quality: data.source_quality || (data.hd_url ? 'hd' : 'best_available'),
           uploader: data.uploader || '',
           platform: '微信视频号',
           referer: 'https://channels.weixin.qq.com/',
@@ -204,6 +225,7 @@ async function createProxyServer({ setProxyErrorCallback }) {
               description: d.description || '微信视频号视频',
               decode_key: d.decode_key || '',
               hd_url: d.hd_url || null,
+              source_quality: d.source_quality || (d.hd_url ? 'hd' : 'best_available'),
               uploader: d.uploader || '',
               platform: '微信视频号',
               referer: 'https://channels.weixin.qq.com/',
@@ -493,6 +515,31 @@ app.on('before-quit', async (e) => {
   try {
     await shutdownServer();
     info('proxy', 'close proxy success');
-  } catch (error) {}
+  } catch (error) {
+    quitCleanupStarted = false;
+    info('proxy', 'close proxy failed', String(error?.message || error));
+    const options = {
+      type: 'warning',
+      title: '系统代理尚未恢复',
+      message: 'WebScoop 暂未退出，以避免系统网络中断',
+      detail: `${String(error?.message || error)}\n\n请保持飞连在线后重试恢复。`,
+      buttons: ['重试恢复并退出', '保持运行'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const result =
+      currentWin && !currentWin.isDestroyed()
+        ? await dialog.showMessageBox(currentWin, options)
+        : await dialog.showMessageBox(options);
+    if (result.response === 0) {
+      setTimeout(() => app.quit(), PROXY_RESTORE_RETRY_DELAY_MILLIS);
+    } else {
+      if (process.platform === 'darwin') app.dock?.show();
+      currentWin?.show?.();
+      app.focus({ steal: true });
+    }
+    return;
+  }
   app.exit();
 });

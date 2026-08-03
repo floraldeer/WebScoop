@@ -2,6 +2,7 @@ const DEFAULT_ENTRY_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_TARGET_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_COMPLETED_TARGET_TTL_MS = 15 * 1000;
 const DEFAULT_CAPTURE_TTL_MS = 30 * 60 * 1000;
+const MAX_TRACKED_ENTRIES = 5000;
 
 const normalizeText = (value) =>
   String(value || '')
@@ -39,6 +40,12 @@ export function createWechatCaptureCoordinator({
     const currentTime = now();
     for (const [key, value] of map) {
       if (currentTime - value.seenAt > ttl) map.delete(key);
+    }
+  };
+
+  const limitMap = (map) => {
+    while (map.size > MAX_TRACKED_ENTRIES) {
+      map.delete(map.keys().next().value);
     }
   };
 
@@ -84,6 +91,7 @@ export function createWechatCaptureCoordinator({
     if (!captureId || captured.has(captureId)) return false;
 
     captured.set(captureId, { seenAt: now() });
+    limitMap(captured);
     const result = {
       ...candidate,
       shareUrl: target ? target.shareUrl : candidate.shareUrl || '',
@@ -104,6 +112,7 @@ export function createWechatCaptureCoordinator({
 
     const candidate = { ...input, keys, seenAt: now(), sequence: ++candidateSequence };
     for (const key of keys) candidates.set(key, candidate);
+    limitMap(candidates);
     for (const key of keys) {
       if (activeKeys.has(key) && tryCapture(candidate)) return true;
     }
@@ -115,6 +124,7 @@ export function createWechatCaptureCoordinator({
     const key = normalizeKey(inputKey);
     if (!key) return false;
     activeKeys.set(key, { seenAt: now() });
+    limitMap(activeKeys);
     return tryCapture(candidates.get(key));
   };
 

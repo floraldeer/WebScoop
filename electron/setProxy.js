@@ -2,9 +2,15 @@ import fs from 'fs';
 import { execFile } from 'child_process';
 import regedit from 'regedit';
 import CONFIG from './const';
-import { parseMacNetworkServices, parseMacProxyState } from './proxyState';
+import {
+  isOwnedMacProxy,
+  matchesMacProxyState,
+  parseMacNetworkServices,
+  parseMacProxyState,
+} from './proxyState';
 
 const REGISTRY_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+const MAC_RESTORE_DELAYS_MS = [0, 200, 500];
 
 regedit.setExternalVBSLocation(CONFIG.REGEDIT_VBS_PATH);
 
@@ -54,12 +60,69 @@ async function setMacProxyState(network, secure, state) {
   await execFileAsync('networksetup', [stateCommand, network, state.enabled ? 'on' : 'off']);
 }
 
-function isOwnedProxy(state, applied) {
-  return (
-    !!state?.enabled &&
-    state.server === applied?.host &&
-    Number(state.port) === Number(applied?.port)
-  );
+async function restoreOwnedMacProxyState(network, secure, original, applied) {
+  const current = await getMacProxyState(network, secure);
+  if (!isOwnedMacProxy(current, applied)) return false;
+
+  if (original.enabled && original.server && original.port) {
+    const setCommand = secure ? '-setsecurewebproxy' : '-setwebproxy';
+    await execFileAsync('networksetup', [
+      setCommand,
+      network,
+      original.server,
+      String(original.port),
+    ]);
+  } else {
+    const stateCommand = secure ? '-setsecurewebproxystate' : '-setwebproxystate';
+    await execFileAsync('networksetup', [stateCommand, network, 'off']);
+  }
+  return true;
+}
+
+function delay(durationMs) {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function getMacProxyLabel(network, secure) {
+  return `${network} ${secure ? 'HTTPS' : 'HTTP'}`;
+}
+
+async function restoreMacProxyState(network, secure, original, applied) {
+  let lastError = null;
+  for (const delayMs of MAC_RESTORE_DELAYS_MS) {
+    if (delayMs) await delay(delayMs);
+    try {
+      if (!(await restoreOwnedMacProxyState(network, secure, original, applied))) return;
+      const restored = await getMacProxyState(network, secure);
+      if (matchesMacProxyState(restored, original) || !isOwnedMacProxy(restored, applied)) {
+        return;
+      }
+      lastError = new Error('恢复后代理仍指向 WebScoop');
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  try {
+    if (
+      !(await restoreOwnedMacProxyState(
+        network,
+        secure,
+        { enabled: false, server: '', port: 0 },
+        applied,
+      ))
+    ) {
+      return;
+    }
+    const disabled = await getMacProxyState(network, secure);
+    if (!isOwnedMacProxy(disabled, applied)) return;
+    lastError = new Error('兜底关闭后代理仍指向 WebScoop');
+  } catch (error) {
+    lastError = error;
+  }
+
+  const detail = lastError?.message || String(lastError || '未知错误');
+  throw new Error(`${getMacProxyLabel(network, secure)} 恢复失败：${detail}`);
 }
 
 async function getMacAvailableNetworks() {
@@ -77,26 +140,21 @@ async function getMacAvailableNetworks() {
 }
 
 async function restoreMacSnapshot(snapshot) {
-  const failedNetworks = [];
+  const failures = [];
   for (const [network, original] of Object.entries(snapshot.services || {})) {
-    let currentWeb;
-    let currentSecure;
     try {
-      currentWeb = await getMacProxyState(network, false);
-      currentSecure = await getMacProxyState(network, true);
-    } catch (e) {
-      failedNetworks.push(network);
-      continue;
+      await restoreMacProxyState(network, false, original.web, snapshot.applied);
+    } catch (error) {
+      failures.push(error.message);
     }
-    if (isOwnedProxy(currentWeb, snapshot.applied)) {
-      await setMacProxyState(network, false, original.web);
-    }
-    if (isOwnedProxy(currentSecure, snapshot.applied)) {
-      await setMacProxyState(network, true, original.secure);
+    try {
+      await restoreMacProxyState(network, true, original.secure, snapshot.applied);
+    } catch (error) {
+      failures.push(error.message);
     }
   }
-  if (failedNetworks.length) {
-    throw new Error(`以下网络服务的代理状态恢复失败：${failedNetworks.join('、')}`);
+  if (failures.length) {
+    throw new Error(failures.join('；'));
   }
   await deleteProxySnapshot();
 }

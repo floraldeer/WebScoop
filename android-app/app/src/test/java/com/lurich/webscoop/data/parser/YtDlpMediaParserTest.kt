@@ -16,7 +16,7 @@ class YtDlpMediaParserTest {
     private val link = SupportedLink(URI("https://youtu.be/video"), Platform.YOUTUBE)
 
     @Test
-    fun `injects login cookie and maps structured video info`() = runBlocking {
+    fun `parses public media anonymously and maps structured video info`() = runBlocking {
         var command: YtDlpCommand? = null
         val parser = YtDlpMediaParser(
             engine = YtDlpEngine {
@@ -43,7 +43,7 @@ class YtDlpMediaParserTest {
         assertEquals("mp4", result.media.format)
         assertEquals(1024, result.media.sizeBytes)
         assertTrue(command!!.options.contains("--no-playlist" to null))
-        assertTrue(command!!.options.contains("--add-header" to "Cookie:session=secret"))
+        assertTrue(command!!.cookieHeader.isBlank())
     }
 
     @Test
@@ -59,7 +59,28 @@ class YtDlpMediaParserTest {
 
         parser.parse(link)
 
-        assertFalse(command!!.options.any { it.first == "--add-header" })
+        assertTrue(command!!.cookieHeader.isBlank())
+    }
+
+    @Test
+    fun `retries an authentication failure with scoped cookie data`() = runBlocking {
+        val commands = mutableListOf<YtDlpCommand>()
+        val parser = YtDlpMediaParser(
+            engine = YtDlpEngine {
+                commands += it
+                if (commands.size == 1) error("Login required")
+                video()
+            },
+            cookieStore = PlatformCookieStore { "session=secret" },
+        )
+
+        val result = parser.parse(link)
+
+        assertTrue(result is MediaParseResult.Success)
+        assertEquals(2, commands.size)
+        assertTrue(commands.first().cookieHeader.isBlank())
+        assertEquals("session=secret", commands.last().cookieHeader)
+        assertEquals("www.youtube.com", commands.last().cookieDomain)
     }
 
     @Test
@@ -77,6 +98,20 @@ class YtDlpMediaParserTest {
             MediaParseResult.Failure(ParseFailure.LoginRequired),
             result,
         )
+    }
+
+    @Test
+    fun `does not classify deprecated cookie header errors as login required`() = runBlocking {
+        val parser = YtDlpMediaParser(
+            engine = YtDlpEngine {
+                error("Deprecated Feature: Passing cookies as a header is a potential security risk")
+            },
+            cookieStore = PlatformCookieStore { "session=secret" },
+        )
+
+        val result = parser.parse(link) as MediaParseResult.Failure
+
+        assertTrue(result.failure is ParseFailure.RemoteError)
     }
 
     @Test

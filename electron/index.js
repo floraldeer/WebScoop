@@ -19,11 +19,12 @@ process.on('unhandledRejection', (reason) => {
   } catch (e) {}
 });
 
+let mainWindow;
+
 function createWindow() {
   Menu.setApplicationMenu(null);
-  initAutoUpdater();
 
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
     minWidth: 900,
@@ -48,16 +49,19 @@ function createWindow() {
   });
   mainWindow.loadURL(CONFIG.APP_START_URL);
   CONFIG.IS_DEV && mainWindow.webContents.openDevTools();
+  mainWindow.on('closed', () => {
+    mainWindow = undefined;
+    setWin(undefined);
+  });
 }
 
 app.whenReady().then(() => {
   initIPC();
+  initAutoUpdater();
   createWindow();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   });
 });
 

@@ -45,4 +45,26 @@ class AllowedLoginHostTest {
             ),
         )
     }
+
+    @Test
+    fun `warns only for blocked main frame HTTPS navigation`() {
+        assertTrue(
+            AllowedLoginHost.shouldWarnBlockedNavigation(
+                URI("https://attacker.example/"),
+                isForMainFrame = true,
+            ),
+        )
+        assertFalse(
+            AllowedLoginHost.shouldWarnBlockedNavigation(
+                URI("bytedance://dispatch_message/"),
+                isForMainFrame = false,
+            ),
+        )
+        assertFalse(
+            AllowedLoginHost.shouldWarnBlockedNavigation(
+                URI("https://attacker.example/"),
+                isForMainFrame = false,
+            ),
+        )
+    }
 }

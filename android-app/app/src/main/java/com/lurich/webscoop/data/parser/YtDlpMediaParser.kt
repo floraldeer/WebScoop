@@ -14,15 +14,27 @@ class YtDlpMediaParser(
 ) : MediaParser {
     override suspend fun parse(link: SupportedLink): MediaParseResult {
         val cookie = cookieStore.getCookieHeader(link)
-        val options = buildList {
+        val options = buildList<Pair<String, String?>> {
             add("--no-playlist" to null)
             add("--no-warnings" to null)
             add("--format" to "best[protocol^=http]/best")
-            if (cookie.isNotBlank()) add("--add-header" to "Cookie:$cookie")
         }
 
         return try {
-            val video = engine.getInfo(YtDlpCommand(link.url.toString(), options))
+            val anonymousCommand = YtDlpCommand(link.url.toString(), options)
+            val video = try {
+                engine.getInfo(anonymousCommand)
+            } catch (anonymousError: Exception) {
+                if (cookie.isBlank() || !isAuthenticationError(anonymousError.message.orEmpty())) {
+                    throw anonymousError
+                }
+                engine.getInfo(
+                    anonymousCommand.copy(
+                        cookieHeader = cookie,
+                        cookieDomain = link.platform.loginUrl.host.orEmpty(),
+                    ),
+                )
+            }
             val mediaUrl = URI(video.mediaUrl)
             if (mediaUrl.scheme !in setOf("http", "https")) {
                 MediaParseResult.Failure(ParseFailure.UnsupportedContent)
@@ -44,16 +56,18 @@ class YtDlpMediaParser(
             }
         } catch (error: Exception) {
             val message = error.message.orEmpty()
-            val failure = if (
-                message.contains("login", ignoreCase = true) ||
-                message.contains("cookie", ignoreCase = true) ||
-                message.contains("sign in", ignoreCase = true)
-            ) {
+            val failure = if (isAuthenticationError(message)) {
                 ParseFailure.LoginRequired
             } else {
                 ParseFailure.RemoteError(sanitizeError(message, cookie))
             }
             MediaParseResult.Failure(failure)
+        }
+    }
+
+    private fun isAuthenticationError(message: String): Boolean {
+        return AUTHENTICATION_ERROR_PATTERNS.any { pattern ->
+            message.contains(pattern, ignoreCase = true)
         }
     }
 
@@ -66,5 +80,17 @@ class YtDlpMediaParser(
             ?.take(200)
             ?.ifBlank { "yt-dlp 解析失败" }
             ?: "yt-dlp 解析失败"
+    }
+
+    private companion object {
+        val AUTHENTICATION_ERROR_PATTERNS = listOf(
+            "login required",
+            "log in to",
+            "not logged in",
+            "sign in",
+            "fresh cookies",
+            "cookies are needed",
+            "authentication required",
+        )
     }
 }

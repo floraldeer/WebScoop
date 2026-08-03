@@ -96,29 +96,55 @@ export const WVDS_INJECT_SCRIPT = `
         var urlToken = media.url_token || media.urlToken || '';
         var hdUrl = '';
         var hdToken = '';
+        var hdSize = 0;
         var extraKeys = [];
+        var baseSize = Number(media.file_size || media.fileSize || 0);
         // spec_video[] 里通常有多档，选 file_size 最大的当 hd，同时把每一档的 encfilekey 收集起来，
         // 因为播放器最终真正读的可能是任意一档（HD/SD/自适应），任何一档命中都要能关联到同一条卡片。
-        var spec = media.spec_video || media.specVideo || media.spec_videos || [];
-        if (spec && spec.length) {
-          var best = spec[0];
+        var rawSpec = media.spec_video || media.specVideo || media.spec_videos;
+        var spec = Array.isArray(rawSpec) ? rawSpec : [];
+        var best = null;
+        if (spec.length) {
+          best = spec[0];
           for (var si = 0; si < spec.length; si++) {
             var uu = spec[si].url || spec[si].Url || '';
             var ekk = extractEncKey(uu);
             if (ekk) extraKeys.push(ekk);
             if ((spec[si].file_size || spec[si].fileSize || 0) > (best.file_size || best.fileSize || 0)) best = spec[si];
           }
-          hdUrl = best.url || best.Url || mediaUrl;
-          hdToken = best.url_token || best.urlToken || urlToken;
-        } else if (media.hd_url || media.hdUrl) {
-          hdUrl = media.hd_url || media.hdUrl;
-          hdToken = media.hd_url_token || media.hdUrlToken || urlToken;
+        }
+        var explicitHdSize = Number(media.hd_file_size || media.hdFileSize || 0);
+        if (media.hd_url || media.hdUrl) {
+          var explicitHdUrl = media.hd_url || media.hdUrl;
+          var explicitHdToken = media.hd_url_token || media.hdUrlToken || urlToken;
+          if (explicitHdUrl + explicitHdToken !== mediaUrl + urlToken) {
+            hdUrl = explicitHdUrl;
+            hdToken = explicitHdToken;
+            hdSize = explicitHdSize;
+          }
+        }
+        if (best) {
+          var bestUrl = best.url || best.Url || '';
+          var bestToken = best.url_token || best.urlToken || urlToken;
+          var bestSize = Number(best.file_size || best.fileSize || 0);
+          var bestIsBetter = bestSize > 0 && (baseSize <= 0 || bestSize > baseSize);
+          if (
+            bestUrl &&
+            bestUrl + bestToken !== mediaUrl + urlToken &&
+            bestIsBetter &&
+            (!hdUrl || (explicitHdSize > 0 && bestSize > explicitHdSize))
+          ) {
+            hdUrl = bestUrl;
+            hdToken = bestToken;
+            hdSize = bestSize;
+          }
         }
         var payload = {
           decode_key: media.decode_key || media.decodeKey || '',
           url: mediaUrl + urlToken,
           hd_url: hdUrl ? hdUrl + hdToken : null,
-          size: media.file_size || media.fileSize || 0,
+          size: hdSize || baseSize,
+          source_quality: hdUrl ? 'hd' : 'best_available',
           description: (descText || '未命名视频').toString().trim().slice(0, 120) || '未命名视频',
           uploader: nickname,
           objectId: obj.id || obj.object_id || '',
@@ -140,6 +166,7 @@ export const WVDS_INJECT_SCRIPT = `
           url: flatUrl + (obj.urlToken || obj.url_token || ''),
           hd_url: null,
           size: obj.fileSize || obj.file_size || 0,
+          source_quality: 'best_available',
           description: (obj.description || obj.desc || '未命名视频').toString().trim(),
           uploader: obj.nickname || obj.nickName || obj.username || '',
           objectId: obj.id || obj.object_id || '',

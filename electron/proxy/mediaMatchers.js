@@ -55,6 +55,53 @@ export function injectScriptToHtml(html) {
   return html + scriptTag;
 }
 
+function appendWechatUrlToken(url, token) {
+  return url ? String(url) + String(token || '') : '';
+}
+
+export function selectWechatMediaSource(media = {}) {
+  const urlToken = media.url_token || media.urlToken || '';
+  const url = appendWechatUrlToken(media.url || media.Url || '', urlToken);
+  const rawVariants = media.spec_video || media.specVideo || media.spec_videos;
+  const variants = Array.isArray(rawVariants) ? rawVariants : [];
+  const bestVariant = [...variants]
+    .filter((item) => item && (item.url || item.Url))
+    .sort(
+      (a, b) => Number(b.file_size || b.fileSize || 0) - Number(a.file_size || a.fileSize || 0),
+    )[0];
+  const variantUrl = bestVariant
+    ? appendWechatUrlToken(
+        bestVariant.url || bestVariant.Url || '',
+        bestVariant.url_token || bestVariant.urlToken || urlToken,
+      )
+    : '';
+  const explicitHdUrl = appendWechatUrlToken(
+    media.hd_url || media.hdUrl || '',
+    media.hd_url_token || media.hdUrlToken || urlToken,
+  );
+  const baseSize = Number(media.file_size || media.fileSize || 0);
+  const variantSize = Number(bestVariant?.file_size || bestVariant?.fileSize || 0);
+  const explicitHdSize = Number(media.hd_file_size || media.hdFileSize || 0);
+  const variantIsBetter =
+    variantUrl &&
+    variantUrl !== url &&
+    variantSize > 0 &&
+    (baseSize <= 0 || variantSize > baseSize);
+  const explicitIsDistinct = explicitHdUrl && explicitHdUrl !== url;
+  const useVariant =
+    variantIsBetter &&
+    (!explicitIsDistinct || (explicitHdSize > 0 && variantSize > explicitHdSize));
+  const hdUrl = useVariant ? variantUrl : explicitIsDistinct ? explicitHdUrl : '';
+  const hdSize = useVariant ? variantSize : explicitIsDistinct ? explicitHdSize : 0;
+
+  return {
+    url,
+    hd_url: hdUrl || null,
+    size: hdSize || baseSize,
+    source_quality: hdUrl ? 'hd' : 'best_available',
+  };
+}
+
 // 递归找带 decode_key 的 media 对象；有 decode_key 才是可下载的真视频。
 export function walkFeedMedia(root) {
   const hits = [];
@@ -70,14 +117,10 @@ export function walkFeedMedia(root) {
       const mUrl = m.url || m.Url || '';
       const dk = m.decode_key || m.decodeKey || '';
       if (mUrl && dk) {
+        const source = selectWechatMediaSource(m);
         hits.push({
-          url: mUrl + (m.url_token || m.urlToken || ''),
-          hd_url:
-            m.hd_url || m.hdUrl
-              ? (m.hd_url || m.hdUrl) + (m.hd_url_token || m.hdUrlToken || '')
-              : null,
+          ...source,
           decode_key: dk,
-          size: m.file_size || m.fileSize || 0,
           description: (localDesc || '微信视频号视频').toString().trim().slice(0, 120),
           uploader: localUploader || '',
         });

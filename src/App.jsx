@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useMachine } from '@xstate/react';
 import { Button, Progress, Alert, Input, Space, Typography, Tag, Tooltip, message } from 'antd';
 import {
@@ -10,12 +10,19 @@ import {
   CloseCircleOutlined,
   SettingOutlined,
   LoginOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
 import fsm from './fsm';
-import { QQ_MUSIC_URL_REGEX, supportedPlatformText, WECHAT_URL_REGEX } from './constants';
+import {
+  extractFirstHttpUrl,
+  QQ_MUSIC_URL_REGEX,
+  supportedPlatformText,
+  WECHAT_URL_REGEX,
+} from './constants';
 import { LoadingScreen, UninitScreen, ServiceFailedScreen } from './components/InitScreen';
 import CaptureTable from './components/CaptureTable';
 import SettingsDrawer from './components/SettingsDrawer';
+import { getPreferredMediaUrl } from './mediaSource';
 
 import './App.less';
 const { Text, Paragraph } = Typography;
@@ -25,6 +32,8 @@ function App() {
   const [state, send] = useMachine(fsm);
   const { captureList, currentUrl, downloadProgress, downloadQueue } = state.context;
   const [inputUrl, setInputUrl] = useState('');
+  const inputVersionRef = useRef(0);
+  const pasteRequestRef = useRef(0);
   const [isParsing, setIsParsing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -127,6 +136,7 @@ function App() {
           noDecrypt: data.noDecrypt,
           extension: data.extension,
           quality: data.quality,
+          resolution: data.resolution,
           isPreview: data.isPreview,
           shareUrl: data.sourceUrl || url,
         });
@@ -167,7 +177,32 @@ function App() {
   }, [inputUrl, openInWechat]);
 
   const clearInputUrl = useCallback(() => {
+    inputVersionRef.current += 1;
     setInputUrl('');
+  }, []);
+
+  const pasteClipboard = useCallback(() => {
+    const requestID = ++pasteRequestRef.current;
+    const inputVersion = inputVersionRef.current;
+    electronAPI
+      .invoke('invoke_读取剪贴板')
+      .then((text) => {
+        if (requestID !== pasteRequestRef.current || inputVersion !== inputVersionRef.current) {
+          return;
+        }
+        const url = extractFirstHttpUrl(text);
+        if (!url) {
+          message.warning('剪贴板中没有可用的 HTTP(S) 链接');
+          return;
+        }
+        inputVersionRef.current += 1;
+        setInputUrl(url);
+      })
+      .catch(() => {
+        if (requestID === pasteRequestRef.current && inputVersion === inputVersionRef.current) {
+          message.error('读取剪贴板失败');
+        }
+      });
   }, []);
 
   const openQqMusicLogin = useCallback(() => {
@@ -185,10 +220,10 @@ function App() {
 
   const redownload = useCallback(
     (record) => {
-      const { url, decodeKey, hdUrl, description, noDecrypt, referer, extension } = record;
+      const { decodeKey, description, noDecrypt, referer, extension } = record;
       send({
         type: 'e_下载',
-        url: hdUrl || url,
+        url: getPreferredMediaUrl(record),
         decodeKey,
         description,
         noDecrypt,
@@ -234,19 +269,31 @@ function App() {
                   placeholder="粘贴视频或音乐分享链接后点【解析下载】"
                   prefix={<LinkOutlined style={{ color: '#94a3b8' }} />}
                   suffix={
-                    inputUrl ? (
-                      <Tooltip title="一键清除地址">
-                        <CloseCircleOutlined
-                          className="address-clear-icon"
-                          onClick={clearInputUrl}
-                        />
-                      </Tooltip>
-                    ) : (
-                      <span />
-                    )
+                    <Space size={4}>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<CopyOutlined />}
+                        onClick={pasteClipboard}
+                        className="address-paste-btn"
+                      >
+                        粘贴
+                      </Button>
+                      {inputUrl ? (
+                        <Tooltip title="一键清除地址">
+                          <CloseCircleOutlined
+                            className="address-clear-icon"
+                            onClick={clearInputUrl}
+                          />
+                        </Tooltip>
+                      ) : null}
+                    </Space>
                   }
                   value={inputUrl}
-                  onChange={(e) => setInputUrl(e.target.value)}
+                  onChange={(e) => {
+                    inputVersionRef.current += 1;
+                    setInputUrl(e.target.value);
+                  }}
                   onPressEnter={handleParseVideo}
                   className="address-input"
                   bordered={false}

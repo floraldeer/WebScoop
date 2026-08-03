@@ -21,4 +21,8 @@ object AllowedLoginHost {
             host == allowedHost || host.endsWith(".$allowedHost")
         }
     }
+
+    fun shouldWarnBlockedNavigation(uri: URI, isForMainFrame: Boolean): Boolean {
+        return isForMainFrame && uri.scheme.equals("https", ignoreCase = true)
+    }
 }

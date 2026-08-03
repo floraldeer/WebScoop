@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 interface MediaDownloader {
     fun enqueue(link: SupportedLink, media: ParsedMedia): Long
@@ -27,6 +28,8 @@ interface MediaDownloader {
     fun observeQueue(): Flow<List<DownloadQueueItem>>
 
     fun cancel(downloadID: Long): Boolean
+
+    suspend fun clearQueueItems(items: Collection<DownloadQueueItem>): Int
 
     fun findExisting(media: ParsedMedia): ExistingDownload?
 
@@ -88,6 +91,7 @@ class SystemMediaDownloader(
     private val downloadManager = requireNotNull(
         applicationContext.getSystemService(DownloadManager::class.java),
     )
+    private val visibilityStore = DownloadQueueVisibilityStore(applicationContext)
 
     override fun enqueue(link: SupportedLink, media: ParsedMedia): Long {
         val fileName = DownloadFileName.from(media)
@@ -126,13 +130,33 @@ class SystemMediaDownloader(
 
     override fun observeQueue(): Flow<List<DownloadQueueItem>> = flow {
         while (currentCoroutineContext().isActive) {
-            emit(readQueue())
+            emit(visibilityStore.filterVisible(readQueue()))
             delay(QUEUE_REFRESH_MILLIS)
         }
     }.flowOn(Dispatchers.IO)
 
     override fun cancel(downloadID: Long): Boolean {
         return downloadManager.remove(downloadID) > 0
+    }
+
+    override suspend fun clearQueueItems(
+        items: Collection<DownloadQueueItem>,
+    ): Int = withContext(Dispatchers.IO) {
+        val distinctItems = items.distinctBy(DownloadQueueItem::downloadID)
+        val currentItems = readQueue(
+            distinctItems.map(DownloadQueueItem::downloadID).toLongArray(),
+        ).associateBy(DownloadQueueItem::downloadID)
+        val clearedDownloadIDs = distinctItems.mapNotNull { selectedItem ->
+            val currentItem = currentItems[selectedItem.downloadID]
+            when {
+                currentItem == null -> selectedItem.downloadID
+                !currentItem.isActive -> selectedItem.downloadID
+                downloadManager.remove(selectedItem.downloadID) > 0 -> selectedItem.downloadID
+                else -> null
+            }
+        }
+        visibilityStore.hide(clearedDownloadIDs)
+        clearedDownloadIDs.size
     }
 
     override fun findExisting(media: ParsedMedia): ExistingDownload? {
@@ -184,8 +208,10 @@ class SystemMediaDownloader(
         applicationContext.startActivity(intent)
     }
 
-    private fun readQueue(): List<DownloadQueueItem> {
-        return downloadManager.query(DownloadManager.Query()).use { cursor ->
+    private fun readQueue(downloadIDs: LongArray = longArrayOf()): List<DownloadQueueItem> {
+        val query = DownloadManager.Query()
+        if (downloadIDs.isNotEmpty()) query.setFilterById(*downloadIDs)
+        return downloadManager.query(query).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) add(cursor.toQueueItem())
             }.sortedByDescending(DownloadQueueItem::downloadID)

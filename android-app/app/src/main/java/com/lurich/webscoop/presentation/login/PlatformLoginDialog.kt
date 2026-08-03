@@ -123,7 +123,9 @@ private class LoginWebViewClient(
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         val uri = request.url.toSafeURI() ?: return true
         if (AllowedLoginHost.accepts(platform, uri)) return false
-        Toast.makeText(view.context, "已阻止非授权登录域名", Toast.LENGTH_SHORT).show()
+        if (AllowedLoginHost.shouldWarnBlockedNavigation(uri, request.isForMainFrame)) {
+            Toast.makeText(view.context, "已阻止非授权登录域名", Toast.LENGTH_SHORT).show()
+        }
         return true
     }
 
