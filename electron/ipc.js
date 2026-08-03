@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { execFile } from 'child_process';
 import { ipcMain, dialog, shell, app, clipboard, BrowserWindow, session } from 'electron';
 import log from 'electron-log';
@@ -7,7 +8,12 @@ import axios from 'axios';
 import CONFIG from './const';
 import { startServer, setWechatCaptureTarget, shutdownServer } from './proxyServer';
 import { installCert, checkCertInstalled, CERT_STATUS } from './cert';
-import { downloadFile, getAvailableFilePath, normalizeMediaExtension } from './utils';
+import {
+  downloadFile,
+  findExistingFilePath,
+  getAvailableFilePath,
+  normalizeMediaExtension,
+} from './utils';
 import { parsePlatformVideo } from './platformParsers';
 import { parseWechatShortLink } from './wechatFinder';
 import { isQqMusicLoginPopupUrl, parseQqMusicUrl } from './qqMusicLogin';
@@ -226,11 +232,27 @@ export default function initIPC() {
           .replace(/[\\/:*?"<>|]/g, '')
           .trim()
           .slice(0, 160) || String(Date.now());
-      const fullFileName = getAvailableFilePath(
-        savePath,
-        fileName,
-        normalizeMediaExtension(extension),
-      );
+      const normalizedExtension = normalizeMediaExtension(extension);
+      const existingFileName = findExistingFilePath(savePath, fileName, normalizedExtension);
+      if (existingFileName) {
+        const options = {
+          type: 'question',
+          title: '文件已存在',
+          message: `“${path.basename(existingFileName)}”已在下载目录中`,
+          detail: '是否再次下载？原文件会保留，新文件将使用带序号的名称。',
+          buttons: ['取消', '再次下载'],
+          defaultId: 1,
+          cancelId: 0,
+          noLink: true,
+        };
+        const result = win
+          ? await dialog.showMessageBox(win, options)
+          : await dialog.showMessageBox(options);
+        if (result.response !== 1) {
+          throw new Error('已取消下载');
+        }
+      }
+      const fullFileName = getAvailableFilePath(savePath, fileName, normalizedExtension);
 
       if (savePath) lastDownloadDir = savePath;
 
@@ -321,6 +343,14 @@ export default function initIPC() {
     }
     const error = await shell.openPath(fullFileName);
     if (error) throw new Error(error);
+    return true;
+  });
+
+  ipcMain.handle('invoke_打开下载文件位置', async (_event, fullFileName) => {
+    if (!downloadedFiles.has(fullFileName) || !fs.existsSync(fullFileName)) {
+      throw new Error('下载文件不存在');
+    }
+    shell.showItemInFolder(fullFileName);
     return true;
   });
 }

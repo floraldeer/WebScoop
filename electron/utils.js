@@ -36,6 +36,27 @@ function xorTransform(decryptionArray) {
   });
 }
 
+function getPreferredFilePath(directory, baseName, extension = '.mp4') {
+  return path.join(directory, `${baseName}${normalizeMediaExtension(extension)}`);
+}
+
+function findExistingFilePath(directory, baseName, extension = '.mp4') {
+  const safeExtension = normalizeMediaExtension(extension);
+  const preferredFilePath = getPreferredFilePath(directory, baseName, safeExtension);
+  if (fs.existsSync(preferredFilePath)) return preferredFilePath;
+  const escapedBaseName = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedExtension = safeExtension.replace('.', '\\.');
+  const pattern = new RegExp(`^${escapedBaseName}(?: \\(\\d+\\))?${escapedExtension}$`);
+  try {
+    const entry = fs
+      .readdirSync(directory, { withFileTypes: true })
+      .find((item) => item.isFile() && pattern.test(item.name));
+    return entry ? path.join(directory, entry.name) : '';
+  } catch {
+    return '';
+  }
+}
+
 function getAvailableFilePath(directory, baseName, extension = '.mp4') {
   const safeExtension = normalizeMediaExtension(extension);
   let index = 0;
@@ -148,4 +169,10 @@ async function downloadFile(url, decodeKey, fullFileName, progressCallback, opti
   }
 }
 
-export { downloadFile, getAvailableFilePath, normalizeMediaExtension };
+export {
+  downloadFile,
+  findExistingFilePath,
+  getAvailableFilePath,
+  getPreferredFilePath,
+  normalizeMediaExtension,
+};

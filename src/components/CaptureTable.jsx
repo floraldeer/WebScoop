@@ -7,6 +7,7 @@ import {
   VideoCameraOutlined,
   ExclamationCircleOutlined,
   ExportOutlined,
+  FolderOpenOutlined,
 } from '@ant-design/icons';
 import { platformColors, supportedPlatformText } from '../constants';
 
@@ -126,7 +127,7 @@ export default function CaptureTable({
 
     return fullFileName ? (
       <Space size={4} direction="vertical" style={{ width: '100%' }}>
-        <Tooltip title="打开文件位置">
+        <Tooltip title="打开已下载文件">
           <Button
             icon={<EyeOutlined />}
             type="default"
@@ -139,7 +140,23 @@ export default function CaptureTable({
             className="view-btn"
             block
           >
-            查看
+            打开
+          </Button>
+        </Tooltip>
+        <Tooltip title="在文件管理器中显示">
+          <Button
+            icon={<FolderOpenOutlined />}
+            type="default"
+            onClick={() =>
+              electronAPI
+                .invoke('invoke_打开下载文件位置', fullFileName)
+                .catch(() => message.error('打开文件位置失败'))
+            }
+            size="small"
+            className="view-btn"
+            block
+          >
+            所在位置
           </Button>
         </Tooltip>
         <Tooltip title="文件已删除？重新下载">

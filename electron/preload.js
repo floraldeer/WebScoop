@@ -22,6 +22,7 @@ const INVOKE_CHANNELS = new Set([
   'invoke_打开外部链接',
   'invoke_打开QQ音乐',
   'invoke_打开已下载文件',
+  'invoke_打开下载文件位置',
 ]);
 
 const EVENT_CHANNELS = new Set(['VIDEO_CAPTURE', 'e_进度变化']);

@@ -3,13 +3,33 @@ import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import { get } from 'axios';
-import { downloadFile, getAvailableFilePath, normalizeMediaExtension } from '../../electron/utils';
+import {
+  downloadFile,
+  findExistingFilePath,
+  getAvailableFilePath,
+  getPreferredFilePath,
+  normalizeMediaExtension,
+} from '../../electron/utils';
 
 jest.mock('axios', () => ({
   get: jest.fn(),
 }));
 
 describe('download file paths', () => {
+  test('builds the preferred path used for duplicate checks', () => {
+    expect(getPreferredFilePath('/downloads', '视频', '.mp4')).toBe('/downloads/视频.mp4');
+    expect(getPreferredFilePath('/downloads', '歌曲', 'm4a')).toBe('/downloads/歌曲.m4a');
+  });
+
+  test('finds original and numbered duplicate files', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'webscoop-'));
+    fs.writeFileSync(path.join(directory, '视频 (2).mp4'), 'duplicate');
+
+    expect(findExistingFilePath(directory, '视频')).toBe(path.join(directory, '视频 (2).mp4'));
+    expect(findExistingFilePath(directory, '其他')).toBe('');
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
   test('adds a numeric suffix instead of overwriting', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'webscoop-'));
     const first = path.join(directory, '视频.mp4');

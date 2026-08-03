@@ -29,3 +29,13 @@ yarn.lock
 .parcel-cache
 .history
 test.mjs
+
+# Android
+/android-app/.gradle
+/android-app/.android-sdk
+/android-app/.android-avd
+/android-app/.android-user
+/android-app/.kotlin
+/android-app/local.properties
+/android-app/**/build
+/android-app/.idea
