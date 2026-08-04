@@ -3,6 +3,7 @@ package com.lurich.webscoop
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.lurich.webscoop.presentation.WebScoopApp
@@ -13,7 +14,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        val systemBarColor = getColor(R.color.theme_background)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(systemBarColor, systemBarColor),
+            navigationBarStyle = SystemBarStyle.light(systemBarColor, systemBarColor),
+        )
         sharedText.value = intent.sharedText()
         val services = (application as WebScoopApplication).services
         setContent {
