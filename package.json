@@ -1,6 +1,6 @@
 {
   "name": "webscoop",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "",
   "main": "./build-electron/index.js",
   "homepage": "./",
