@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -56,6 +57,7 @@ import com.lurich.webscoop.domain.parser.ParseFailure
 import com.lurich.webscoop.domain.parser.ParsedMedia
 import com.lurich.webscoop.presentation.login.PlatformLoginDialog
 import com.lurich.webscoop.presentation.theme.WebScoopTheme
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -80,6 +82,7 @@ fun WebScoopApp(
     }
     var duplicateFileName by remember { mutableStateOf("") }
     var isParsing by remember { mutableStateOf(false) }
+    var parseJob by remember { mutableStateOf<Job?>(null) }
     var loginPlatform by remember { mutableStateOf<com.lurich.webscoop.domain.model.Platform?>(null) }
     val linkResult = remember(input) {
         if (input.isBlank()) null else SharedLinkParser.parse(input)
@@ -206,17 +209,25 @@ fun WebScoopApp(
                         ) {
                             Button(
                                 onClick = {
+                                    if (isParsing) {
+                                        parseJob?.cancel()
+                                        return@Button
+                                    }
                                     val link = (linkResult as? LinkParseResult.Supported)?.link
                                         ?: return@Button
                                     isParsing = true
                                     parseResult = null
                                     downloadMessage = ""
-                                    scope.launch {
-                                        parseResult = parser.parse(link)
-                                        isParsing = false
+                                    parseJob = scope.launch {
+                                        try {
+                                            parseResult = parser.parse(link)
+                                        } finally {
+                                            isParsing = false
+                                            parseJob = null
+                                        }
                                     }
                                 },
-                                enabled = linkResult is LinkParseResult.Supported && !isParsing,
+                                enabled = isParsing || linkResult is LinkParseResult.Supported,
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.primary,
@@ -227,6 +238,8 @@ fun WebScoopApp(
                                         modifier = Modifier.height(20.dp),
                                         strokeWidth = 2.dp,
                                     )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("取消解析")
                                 } else {
                                     Text("解析媒体")
                                 }

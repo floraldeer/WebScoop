@@ -7,10 +7,14 @@ import com.lurich.webscoop.domain.parser.MediaParser
 import com.lurich.webscoop.domain.parser.ParseFailure
 import com.lurich.webscoop.domain.parser.ParsedMedia
 import java.net.URI
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 
 class YtDlpMediaParser(
     private val engine: YtDlpEngine,
     private val cookieStore: PlatformCookieStore,
+    private val parseTimeoutMillis: Long = PARSE_TIMEOUT_MILLIS,
 ) : MediaParser {
     override suspend fun parse(link: SupportedLink): MediaParseResult {
         val cookie = cookieStore.getCookieHeader(link)
@@ -18,42 +22,58 @@ class YtDlpMediaParser(
             add("--no-playlist" to null)
             add("--no-warnings" to null)
             add("--format" to "best[protocol^=http]/best")
+            add("--socket-timeout" to SOCKET_TIMEOUT_SECONDS.toString())
+            add("--retries" to RETRY_COUNT.toString())
+            add("--extractor-retries" to RETRY_COUNT.toString())
         }
 
         return try {
-            val anonymousCommand = YtDlpCommand(link.url.toString(), options)
-            val video = try {
-                engine.getInfo(anonymousCommand)
-            } catch (anonymousError: Exception) {
-                if (cookie.isBlank() || !isAuthenticationError(anonymousError.message.orEmpty())) {
-                    throw anonymousError
+            withTimeout(parseTimeoutMillis) {
+                val anonymousCommand = YtDlpCommand(link.url.toString(), options)
+                val video = try {
+                    engine.getInfo(anonymousCommand)
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (anonymousError: Exception) {
+                    if (
+                        cookie.isBlank() ||
+                        !isAuthenticationError(anonymousError.message.orEmpty())
+                    ) {
+                        throw anonymousError
+                    }
+                    engine.getInfo(
+                        anonymousCommand.copy(
+                            cookieHeader = cookie,
+                            cookieDomain = link.platform.loginUrl.host.orEmpty(),
+                        ),
+                    )
                 }
-                engine.getInfo(
-                    anonymousCommand.copy(
-                        cookieHeader = cookie,
-                        cookieDomain = link.platform.loginUrl.host.orEmpty(),
-                    ),
-                )
+                val mediaUrl = URI(video.mediaUrl)
+                if (mediaUrl.scheme !in setOf("http", "https")) {
+                    MediaParseResult.Failure(ParseFailure.UnsupportedContent)
+                } else {
+                    MediaParseResult.Success(
+                        ParsedMedia(
+                            sourceUrl = link.url,
+                            mediaUrl = mediaUrl,
+                            title = video.title.ifBlank { link.platform.displayName },
+                            uploader = video.uploader,
+                            format = video.extension.ifBlank { video.format },
+                            quality = video.resolution,
+                            sizeBytes = video.sizeBytes.coerceAtLeast(0),
+                            referer = video.webpageUrl
+                                .takeIf(String::isNotBlank)
+                                ?.let(::URI),
+                        ),
+                    )
+                }
             }
-            val mediaUrl = URI(video.mediaUrl)
-            if (mediaUrl.scheme !in setOf("http", "https")) {
-                MediaParseResult.Failure(ParseFailure.UnsupportedContent)
-            } else {
-                MediaParseResult.Success(
-                    ParsedMedia(
-                        sourceUrl = link.url,
-                        mediaUrl = mediaUrl,
-                        title = video.title.ifBlank { link.platform.displayName },
-                        uploader = video.uploader,
-                        format = video.extension.ifBlank { video.format },
-                        quality = video.resolution,
-                        sizeBytes = video.sizeBytes.coerceAtLeast(0),
-                        referer = video.webpageUrl
-                            .takeIf(String::isNotBlank)
-                            ?.let(::URI),
-                    ),
-                )
-            }
+        } catch (error: TimeoutCancellationException) {
+            MediaParseResult.Failure(
+                ParseFailure.RemoteError("解析超时，请检查网络后重试"),
+            )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
         } catch (error: Exception) {
             val message = error.message.orEmpty()
             val failure = if (isAuthenticationError(message)) {
@@ -92,5 +112,8 @@ class YtDlpMediaParser(
             "cookies are needed",
             "authentication required",
         )
+        const val PARSE_TIMEOUT_MILLIS = 45_000L
+        const val SOCKET_TIMEOUT_SECONDS = 15
+        const val RETRY_COUNT = 2
     }
 }

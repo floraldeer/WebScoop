@@ -7,13 +7,19 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 class AndroidYtDlpEngine(context: Context) : YtDlpEngine {
     private val applicationContext = context.applicationContext
@@ -39,38 +45,49 @@ class AndroidYtDlpEngine(context: Context) : YtDlpEngine {
     override suspend fun getInfo(command: YtDlpCommand): YtDlpVideo = withContext(Dispatchers.IO) {
         ensureInitialized()
         val resolvedUrl = resolveDouyinShortUrl(command.url)
+        currentCoroutineContext().ensureActive()
         val request = YoutubeDLRequest(resolvedUrl)
         command.options.forEach { (name, value) ->
             if (value == null) request.addOption(name) else request.addOption(name, value)
         }
+        request.addOption("--dump-json")
         val cookieFile = createCookieFile(command)
         if (cookieFile != null) request.addOption("--cookies", cookieFile.absolutePath)
+        val processID = "webscoop-info-${UUID.randomUUID()}"
         val info = try {
-            YoutubeDL.getInstance().getInfo(request)
+            val response = runInterruptible(Dispatchers.IO) {
+                YoutubeDL.getInstance().execute(request, processID, null)
+            }
+            JSONObject(response.out)
         } finally {
+            YoutubeDL.getInstance().destroyProcessById(processID)
             cookieFile?.delete()
         }
 
         YtDlpVideo(
-            mediaUrl = info.url.orEmpty(),
-            title = info.title.orEmpty(),
-            uploader = info.uploader.orEmpty(),
-            format = info.format.orEmpty(),
-            resolution = info.resolution.orEmpty(),
-            extension = info.ext.orEmpty(),
-            sizeBytes = maxOf(info.fileSize, info.fileSizeApproximate),
-            webpageUrl = info.webpageUrl.orEmpty(),
+            mediaUrl = info.optString("url"),
+            title = info.optString("title"),
+            uploader = info.optString("uploader"),
+            format = info.optString("format"),
+            resolution = info.optString("resolution"),
+            extension = info.optString("ext"),
+            sizeBytes = maxOf(
+                info.optLong("filesize", 0),
+                info.optLong("filesize_approx", 0),
+            ),
+            webpageUrl = info.optString("webpage_url"),
         )
     }
 
-    private fun resolveDouyinShortUrl(url: String): String {
+    private suspend fun resolveDouyinShortUrl(url: String): String {
         val source = runCatching { URI(url) }.getOrNull() ?: return url
         if (!isAllowedDouyinUri(source) || !source.host.equals("v.douyin.com", ignoreCase = true)) {
             return url
         }
-        return runCatching {
+        return try {
             var current = source
             repeat(MAX_REDIRECTS) {
+                currentCoroutineContext().ensureActive()
                 val connection = URL(current.toString()).openConnection() as HttpURLConnection
                 connection.instanceFollowRedirects = false
                 connection.requestMethod = "GET"
@@ -78,14 +95,17 @@ class AndroidYtDlpEngine(context: Context) : YtDlpEngine {
                 connection.readTimeout = URL_RESOLVE_TIMEOUT_MILLIS
                 connection.setRequestProperty("User-Agent", MOBILE_USER_AGENT)
                 try {
-                    val status = connection.responseCode
-                    if (status !in 300..399) return@runCatching current.toString()
+                    val status = runInterruptible(Dispatchers.IO) {
+                        connection.responseCode
+                    }
+                    currentCoroutineContext().ensureActive()
+                    if (status !in 300..399) return current.toString()
                     val location = connection.getHeaderField("Location")
                         ?.takeIf(String::isNotBlank)
-                        ?: return@runCatching current.toString()
+                        ?: return current.toString()
                     val next = current.resolve(location)
                     if (!isAllowedDouyinUri(next)) {
-                        return@runCatching url
+                        return url
                     }
                     current = next
                 } finally {
@@ -93,7 +113,12 @@ class AndroidYtDlpEngine(context: Context) : YtDlpEngine {
                 }
             }
             current.toString()
-        }.getOrDefault(url)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            currentCoroutineContext().ensureActive()
+            url
+        }
     }
 
     private fun isAllowedDouyinUri(uri: URI): Boolean {

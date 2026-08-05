@@ -6,7 +6,11 @@ import com.lurich.webscoop.domain.model.Platform
 import com.lurich.webscoop.domain.parser.MediaParseResult
 import com.lurich.webscoop.domain.parser.ParseFailure
 import java.net.URI
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -43,7 +47,40 @@ class YtDlpMediaParserTest {
         assertEquals("mp4", result.media.format)
         assertEquals(1024, result.media.sizeBytes)
         assertTrue(command!!.options.contains("--no-playlist" to null))
+        assertTrue(command!!.options.contains("--socket-timeout" to "15"))
+        assertTrue(command!!.options.contains("--retries" to "2"))
+        assertTrue(command!!.options.contains("--extractor-retries" to "2"))
         assertTrue(command!!.cookieHeader.isBlank())
+    }
+
+    @Test
+    fun `returns a retryable failure when parsing exceeds the total timeout`() = runBlocking {
+        val parser = YtDlpMediaParser(
+            engine = YtDlpEngine { awaitCancellation() },
+            cookieStore = PlatformCookieStore { "" },
+            parseTimeoutMillis = 10,
+        )
+
+        val result = parser.parse(link) as MediaParseResult.Failure
+
+        assertEquals(
+            ParseFailure.RemoteError("解析超时，请检查网络后重试"),
+            result.failure,
+        )
+    }
+
+    @Test
+    fun `propagates cancellation instead of converting it to a parse failure`() = runBlocking {
+        val parser = YtDlpMediaParser(
+            engine = YtDlpEngine { awaitCancellation() },
+            cookieStore = PlatformCookieStore { "" },
+        )
+
+        val parseJob = launch { parser.parse(link) }
+        yield()
+        parseJob.cancelAndJoin()
+
+        assertTrue(parseJob.isCancelled)
     }
 
     @Test
