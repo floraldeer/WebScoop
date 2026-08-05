@@ -4,6 +4,7 @@ import android.content.ClipboardManager
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,7 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -43,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.lurich.webscoop.domain.link.LinkParseResult
 import com.lurich.webscoop.domain.link.SharedLinkParser
@@ -58,6 +60,7 @@ import com.lurich.webscoop.domain.parser.ParsedMedia
 import com.lurich.webscoop.presentation.login.PlatformLoginDialog
 import com.lurich.webscoop.presentation.theme.WebScoopTheme
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -82,6 +85,7 @@ fun WebScoopApp(
     }
     var duplicateFileName by remember { mutableStateOf("") }
     var isParsing by remember { mutableStateOf(false) }
+    var parseElapsedSeconds by remember { mutableStateOf(0) }
     var parseJob by remember { mutableStateOf<Job?>(null) }
     var loginPlatform by remember { mutableStateOf<com.lurich.webscoop.domain.model.Platform?>(null) }
     val linkResult = remember(input) {
@@ -121,6 +125,17 @@ fun WebScoopApp(
             input = incomingText
             parseResult = null
             downloadMessage = ""
+        }
+    }
+
+    LaunchedEffect(isParsing) {
+        if (!isParsing) {
+            parseElapsedSeconds = 0
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(1_000)
+            parseElapsedSeconds += 1
         }
     }
 
@@ -216,6 +231,7 @@ fun WebScoopApp(
                                     val link = (linkResult as? LinkParseResult.Supported)?.link
                                         ?: return@Button
                                     isParsing = true
+                                    parseElapsedSeconds = 0
                                     parseResult = null
                                     downloadMessage = ""
                                     parseJob = scope.launch {
@@ -234,12 +250,19 @@ fun WebScoopApp(
                                 ),
                             ) {
                                 if (isParsing) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.height(20.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("取消解析")
+                                    Box(modifier = Modifier.fillMaxWidth()) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .align(Alignment.CenterStart),
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                            strokeWidth = 2.dp,
+                                        )
+                                        Text(
+                                            "取消解析",
+                                            modifier = Modifier.align(Alignment.Center),
+                                        )
+                                    }
                                 } else {
                                     Text("解析媒体")
                                 }
@@ -255,6 +278,15 @@ fun WebScoopApp(
                             ) {
                                 Text("清空输入")
                             }
+                        }
+                        if (isParsing) {
+                            Text(
+                                text = parseProgressText(parseElapsedSeconds),
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.secondary,
+                                style = MaterialTheme.typography.labelMedium,
+                                textAlign = TextAlign.Center,
+                            )
                         }
                         if (linkResult is LinkParseResult.Supported) {
                             Button(
@@ -606,6 +638,16 @@ private fun formatBytes(bytes: Long): String = when {
     else -> "${bytes / 1024 / 1024} MB"
 }
 
+internal fun parseProgressText(elapsedSeconds: Int): String {
+    val safeElapsedSeconds = elapsedSeconds.coerceAtLeast(0)
+    val stage = if (safeElapsedSeconds < SLOW_PARSE_THRESHOLD_SECONDS) {
+        "正在解析媒体"
+    } else {
+        "网络响应较慢"
+    }
+    return "$stage · ${safeElapsedSeconds}秒"
+}
+
 @Composable
 private fun ParseResultCard(
     result: MediaParseResult?,
@@ -653,3 +695,5 @@ private fun ParseResultCard(
         )
     }
 }
+
+private const val SLOW_PARSE_THRESHOLD_SECONDS = 30
